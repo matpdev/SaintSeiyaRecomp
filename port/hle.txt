@@ -1,0 +1,3 @@
+# Guest functions replaced by native ones (port/hle/*.c). The recompiler emits a call to the native
+# function instead of translating the guest code. Format: address native_function  # what it is
+0x00110C28 hle_tty_write        # SDK: write text to the Deci2 TTY (debug console), (buf, len) -> len

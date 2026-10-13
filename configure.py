@@ -20,6 +20,7 @@ YAML = "config/sles_541.62.yaml"
 TARGET = "disc/SLES_541.62"
 OUT = "build/SLES_541.62"
 
+RC_FILES = 35          # number of rc_NNN.c files tools/recomp/recomp.py writes (13855 functions / 400)
 AS_FLAGS = "-EL -march=r5900 -mabi=eabi -G0 -no-pad-sections -Iinclude"
 
 
@@ -64,6 +65,24 @@ def main():
         n.build(f"{OUT}.rom", "objcopy", f"{OUT}.elf")
         n.build(f"{OUT}.ok", "check", f"{OUT}.rom")
         n.default(f"{OUT}.ok")
+
+        # ---- native port: recompiled code + runtime (see docs/roadmap.md)
+        code = [s for s in sources if not s.startswith("asm/data/")]
+        n.rule("recomp", f"{sys.executable} -I tools/recomp/recomp.py {TARGET} build/recomp $in",
+               description="recomp", restat=True)
+        n.rule("cc", "gcc -c -O1 -g -w -fno-strict-aliasing -Iport/runtime -Iport/kernel -Ibuild/recomp "
+                     "-MMD -MF $out.d $in -o $out", depfile="$out.d", deps="gcc", description="cc $in")
+        n.rule("link", "gcc $in -o $out -lm -lpthread", description="link $out")
+        rc_files = [f"build/recomp/rc_{k:03d}.c" for k in range(RC_FILES)] + ["build/recomp/functab.c"]
+        n.build(rc_files, "recomp", code, implicit=["tools/recomp/recomp.py", "port/hle.txt"])
+        port_srcs = sorted(glob.glob("port/**/*.c", recursive=True))
+        port_objs = []
+        for src in rc_files + port_srcs:
+            o = "build/port/" + src.replace("/", "_")[:-2] + ".o"
+            n.build(o, "cc", src, order_only=rc_files)
+            port_objs.append(o)
+        n.build("build/sstheh", "link", port_objs)
+        n.build("port", "phony", "build/sstheh")
     print(f"build.ninja written: {len(sources)} asm files, {len(bins)} binary files")
 
 
