@@ -29,8 +29,9 @@ extern u64 gs_prims;
 
 static u32 frame[1024 * 1024];
 
-/* --press 600:CROSS,700:START: press a button for 6 vertical blanks at those times (tests) */
-typedef struct { int at; u16 btn; } Press;
+/* --press 600:CROSS,700:START,800:DOWN:20: press a button at those times for 6 vertical blanks, or for
+   the given number (tests) */
+typedef struct { int at, len; u16 btn; } Press;
 static Press presses[64];
 static int npresses;
 
@@ -46,15 +47,18 @@ void display_set_presses(const char *spec) {
         char *colon = strchr(tok, ':');
         if (!colon) continue;
         *colon = 0;
+        char *len = strchr(colon + 1, ':');
+        if (len) *len++ = 0;
         for (size_t i = 0; i < sizeof button_names / sizeof *button_names; i++)
-            if (!strcmp(colon + 1, button_names[i].name)) presses[npresses++] = (Press){atoi(tok), button_names[i].bit};
+            if (!strcmp(colon + 1, button_names[i].name))
+                presses[npresses++] = (Press){atoi(tok), len ? atoi(len) : 6, button_names[i].bit};
     }
 }
 
 static u16 scripted(u32 vb) {
     u16 b = 0;
     for (int i = 0; i < npresses; i++)
-        if ((int)vb >= presses[i].at && (int)vb < presses[i].at + 6) b |= presses[i].btn;
+        if ((int)vb >= presses[i].at && (int)vb < presses[i].at + presses[i].len) b |= presses[i].btn;
     return b;
 }
 

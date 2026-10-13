@@ -514,6 +514,7 @@ static u32 page_gen[512];                  /* bumped when anything writes into t
 static u8 rt_fbp[512];                     /* frame buffers drawn to (FBP), for render-to-texture */
 static pthread_mutex_t rec_lock = PTHREAD_MUTEX_INITIALIZER;
 static GpuFrame frames[2], *rec = &frames[0];
+static u32 rec_frame = 1;                  /* frames handed to the GPU side */
 
 static void pages_written(u32 bp_blocks, u32 blocks) {
     for (u32 pg = bp_blocks / 32; pg <= (bp_blocks + blocks) / 32 && pg < bp_blocks / 32 + 512; pg++) page_gen[pg & 511]++;
@@ -528,23 +529,94 @@ GpuFrame *gpu_take_frame(void) {
     GpuFrame *done = rec;
     rec = done == &frames[0] ? &frames[1] : &frames[0];
     for (u32 i = 0; i < rec->nuploads; i++) free(rec->uploads[i].px);
-    rec->ndraws = rec->nverts = rec->nuploads = 0;
+    rec->ndraws = rec->nverts = rec->nuploads = rec->nfrees = 0;
+    rec_frame++;
     pthread_mutex_unlock(&rec_lock);
     given = done;
     return given;
 }
 
-/* ---- texture cache: decoded RGBA by (TEX0, TEXA, versions of the pages read) */
-typedef struct { u64 key[3]; u32 id; } TexSlot;
-static TexSlot tex_cache[8192];
-static u32 next_tex_id = 1;
+/* ---- texture cache
+ * Textures are identified by their content: TEX0, TEXA and a hash of the GS memory pages they read
+ * (and of the CLUT's). The game uploads many textures again every frame with the same data, so
+ * page versions alone would decode and upload them again each frame. Page versions stay as a fast
+ * path: while none of the pages changed, the content is not hashed again.
+ * gs.c owns the textures' lifetime: entries are indices 1..GPU_MAX_TEX-1 (the GPU texture slot),
+ * the least recently used go when there are too many bytes or no free entry, and the frame tells
+ * the GPU side which to release. */
+typedef struct { u64 ckey[3]; u32 w, h, last, used; } TexEnt;
+static TexEnt tex_ents[GPU_MAX_TEX];
+static u32 tex_free[GPU_MAX_TEX], ntex_free, tex_inited;
+static u64 tex_bytes;
+#define TEX_BUDGET (256ull << 20)
 
-static u64 pages_version(u32 bp, u32 bytes) {
+typedef struct { u64 key[3]; u64 ckey[3]; u32 idx; } TexFast;   /* (TEX0, TEXA, page versions) -> entry */
+static TexFast tex_fast[8192];
+static u32 tex_by_content[16384];          /* content key -> entry (direct mapped) */
+
+static u64 pages_version(u32 first, u32 n) {
     u64 h = 1469598103934665603ull;
-    u32 first = bp / 32, last = (bp + (bytes + 255) / 256) / 32;
-    for (u32 pg = first; pg <= last && pg < first + 512; pg++) h = (h ^ page_gen[pg & 511]) * 1099511628211ull ^ pg;
+    for (u32 pg = first; pg < first + n; pg++) h = (h ^ page_gen[pg & 511]) * 1099511628211ull ^ pg;
     return h;
 }
+
+static u64 pages_hash(u32 first, u32 n) {
+    u64 h = 0x9E3779B97F4A7C15ull ^ n;
+    for (u32 pg = first; pg < first + n; pg++) {
+        const u64 *w = (const u64 *)&vram[(pg & 511) * 2048];
+        u64 a = h, b = h ^ 0xC2B2AE3D27D4EB4Full;
+        for (int i = 0; i < 1024; i += 2) {
+            a = (a ^ w[i]) * 0x100000001B3ull;
+            b = (b ^ w[i + 1]) * 0xFF51AFD7ED558CCDull;
+        }
+        h = (h ^ a ^ (b >> 29)) * 0x9E3779B97F4A7C15ull ^ pg;
+    }
+    return h;
+}
+
+/* The 8 KB pages a tw x th texture at bp (blocks), width bw, format psm lies in. */
+static void footprint(u32 bp, u32 bw, u32 psm, u32 tw, u32 th, u32 *first, u32 *n) {
+    if (bw == 0) bw = 1;
+    if ((psm & 0x30) == 0x30) psm &= 0x0F;
+    u32 x = tw - 1, y = th - 1, last;
+    switch (psm) {
+    case 0x02: case 0x0A: last = (y >> 6) * bw + (x >> 6); break;
+    case 0x13: last = (y >> 6) * (bw >> 1 ? bw >> 1 : 1) + (x >> 7); break;
+    case 0x14: last = (y >> 7) * (bw >> 1 ? bw >> 1 : 1) + (x >> 7); break;
+    default: last = (y >> 5) * bw + (x >> 6); break;
+    }
+    *first = bp / 32;
+    *n = last + 1 + ((bp & 31) != 0);
+    if (*n > 512) *n = 512;
+}
+
+static void tex_release(u32 i) {
+    tex_ents[i].used = 0;
+    tex_bytes -= (u64)tex_ents[i].w * tex_ents[i].h * 4;
+    tex_free[ntex_free++] = i;
+    GROW(rec->frees, rec->nfrees, rec->cap_frees, u32);
+    rec->frees[rec->nfrees++] = i;
+}
+
+/* A free entry for w x h, dropping the least recently used ones (never those of this frame). */
+static u32 tex_alloc(u32 w, u32 h) {
+    if (!tex_inited) {
+        for (u32 i = GPU_MAX_TEX - 1; i >= 1; i--) tex_free[ntex_free++] = i;
+        tex_inited = 1;
+    }
+    u64 need = (u64)w * h * 4;
+    static const u32 ages[] = {600, 120, 30, 2, 1};
+    for (int k = 0; k < 5 && (tex_bytes + need > TEX_BUDGET || ntex_free == 0); k++)
+        for (u32 i = 1; i < GPU_MAX_TEX; i++)
+            if (tex_ents[i].used && rec_frame - tex_ents[i].last >= ages[k]) tex_release(i);
+    if (ntex_free == 0) return 0;
+    u32 i = tex_free[--ntex_free];
+    tex_ents[i] = (TexEnt){{0}, w, h, rec_frame, 1};
+    tex_bytes += need;
+    return i;
+}
+
+u32 gpu_tex_stats(u64 *bytes) { *bytes = tex_bytes; return GPU_MAX_TEX - 1 - ntex_free; }
 
 static s32 texture_for(int ctx, u32 *w_out, u32 *h_out) {
     u64 t0 = gs.tex0[ctx];
@@ -557,32 +629,48 @@ static s32 texture_for(int ctx, u32 *w_out, u32 *h_out) {
     *h_out = th;
     /* a frame buffer the game drew into, read as a 32/24-bit texture: the render target itself */
     if ((tbp & 31) == 0 && rt_fbp[(tbp >> 5) & 511] && psm_bits(psm) >= 24) return -2 - (s32)(tbp >> 5);
-    u32 bits = psm_bits(psm);
-    u64 key[3] = {t0 & 0x1FFFFFFFFFFFFFFFull, gs.texa,
-                  pages_version(tbp, (tbw ? tbw : 1) * 64 * th * bits / 8) * 31 + (bits <= 8 ? pages_version(cbp, 1024) : 0)};
-    u32 slot = (u32)((key[0] ^ key[1] * 7 ^ key[2] * 13) % 8192);
-    TexSlot *ts = &tex_cache[slot];
-    if (ts->id && !memcmp(ts->key, key, sizeof key)) return (s32)ts->id;
-    /* decode */
-    u32 *px = malloc((size_t)tw * th * 4);
-    for (u32 y = 0; y < th; y++)
-        for (u32 x = 0; x < tw; x++) {
-            u32 c = vram_rw(tbp, tbw, psm, x, y, 0, 0);
-            if (bits > 8) c = expand(c, psm);
-            else if (bits == 8) {
-                c = (c & 0xE7) | ((c & 8) << 1) | ((c & 0x10) >> 1);
-                c = expand(vram_rw(cbp, 1, cpsm, c & 15, c >> 4, 0, 0), cpsm);
-            } else {
-                c += (csa & 15) * 16;
-                c = expand(vram_rw(cbp, 1, cpsm, c & 7, (c >> 3) & 31, 0, 0), cpsm);
+    u32 bits = psm_bits(psm), pfirst, pn;
+    footprint(tbp, tbw, psm, tw, th, &pfirst, &pn);
+    u32 cfirst = cbp / 32, cn = bits <= 8 ? 1 + ((cbp & 31) != 0) : 0;
+    u64 base = t0 & 0x1FFFFFFFFFFFFFFFull;
+    u64 key[3] = {base, gs.texa, pages_version(pfirst, pn) * 31 + (cn ? pages_version(cfirst, cn) : 0)};
+    TexFast *f = &tex_fast[(key[0] ^ key[1] * 7 ^ key[2] * 13) % 8192];
+    if (f->idx && !memcmp(f->key, key, sizeof key)) {
+        TexEnt *e = &tex_ents[f->idx];
+        if (e->used && !memcmp(e->ckey, f->ckey, sizeof f->ckey)) { e->last = rec_frame; return (s32)f->idx; }
+    }
+    /* the pages changed (or never seen): same content as a texture we have? */
+    u64 ckey[3] = {base, gs.texa, pages_hash(pfirst, pn) * 31 + (cn ? pages_hash(cfirst, cn) : 0)};
+    u32 *cs = &tex_by_content[(ckey[0] ^ ckey[1] * 7 ^ ckey[2] * 13) % 16384];
+    u32 idx = *cs;
+    if (!(idx && tex_ents[idx].used && !memcmp(tex_ents[idx].ckey, ckey, sizeof ckey))) {
+        /* decode */
+        idx = tex_alloc(tw, th);
+        if (!idx) return -1;
+        u32 *px = malloc((size_t)tw * th * 4);
+        for (u32 y = 0; y < th; y++)
+            for (u32 x = 0; x < tw; x++) {
+                u32 c = vram_rw(tbp, tbw, psm, x, y, 0, 0);
+                if (bits > 8) c = expand(c, psm);
+                else if (bits == 8) {
+                    c = (c & 0xE7) | ((c & 8) << 1) | ((c & 0x10) >> 1);
+                    c = expand(vram_rw(cbp, 1, cpsm, c & 15, c >> 4, 0, 0), cpsm);
+                } else {
+                    c += (csa & 15) * 16;
+                    c = expand(vram_rw(cbp, 1, cpsm, c & 7, (c >> 3) & 31, 0, 0), cpsm);
+                }
+                px[y * tw + x] = c;
             }
-            px[y * tw + x] = c;
-        }
-    memcpy(ts->key, key, sizeof key);
-    ts->id = next_tex_id++;
-    GROW(rec->uploads, rec->nuploads, rec->cap_uploads, GpuTexUpload);
-    rec->uploads[rec->nuploads++] = (GpuTexUpload){ts->id, tw, th, px};
-    return (s32)ts->id;
+        memcpy(tex_ents[idx].ckey, ckey, sizeof ckey);
+        *cs = idx;
+        GROW(rec->uploads, rec->nuploads, rec->cap_uploads, GpuTexUpload);
+        rec->uploads[rec->nuploads++] = (GpuTexUpload){idx, tw, th, px};
+    }
+    tex_ents[idx].last = rec_frame;
+    memcpy(f->key, key, sizeof key);
+    memcpy(f->ckey, ckey, sizeof ckey);
+    f->idx = idx;
+    return (s32)idx;
 }
 
 static void put_vertex(const Vertex *v, u32 z_shift, const Vertex *colour_of, int fst) {

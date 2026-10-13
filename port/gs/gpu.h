@@ -5,11 +5,13 @@
  * gs.c keeps interpreting GIF packets and keeps GS memory up to date for uploads; with the GPU
  * renderer on, primitives are not rasterised there but recorded: vertices as triangles, each draw
  * with a snapshot of the state it needs. Textures are decoded from GS memory when recorded (GS
- * memory may change later in the frame) into RGBA, cached by their parameters and the versions of
- * the memory pages they read.
+ * memory may change later in the frame) into RGBA, cached by their parameters and content; gs.c
+ * decides when they are dropped.
  */
 #pragma once
 #include "r5900.h"
+
+#define GPU_MAX_TEX 8192           /* texture indices are below this */
 
 typedef struct {
     float x, y, z, _p0;       /* GS pixels; depth 0..1 */
@@ -34,7 +36,7 @@ typedef struct {
 } GpuDraw;
 
 typedef struct {
-    u32 id;                     /* texture id (stable across frames while cached) */
+    u32 id;                     /* texture index, 1..GPU_MAX_TEX-1 */
     u32 w, h;
     u32 *px;                    /* RGBA, alpha in GS units (0x80 = 1.0) */
 } GpuTexUpload;
@@ -46,6 +48,8 @@ typedef struct {
     u32 nverts, cap_verts;
     GpuTexUpload *uploads;
     u32 nuploads, cap_uploads;
+    u32 *frees;                 /* textures no longer used (released before the uploads) */
+    u32 nfrees, cap_frees;
     u64 dispfb, display, pmode; /* what the CRT shows when the frame was handed over */
 } GpuFrame;
 
@@ -54,6 +58,7 @@ extern int gpu_on;              /* the GPU renderer records instead of rasterisi
 /* window's thread: the draws recorded since the last call (gs.c); the frame stays valid until the
    next call */
 GpuFrame *gpu_take_frame(void);
+u32 gpu_tex_stats(u64 *bytes);                   /* textures alive and their decoded bytes */
 
 /* window's thread (gpu_vk.c) */
 int gpu_init(void *sdl_window);                  /* window NULL: off screen (--shot) */

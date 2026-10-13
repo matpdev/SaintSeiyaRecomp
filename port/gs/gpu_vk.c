@@ -25,7 +25,7 @@
 
 #define RT_SIZE 1024
 #define MAX_RT 64
-#define MAX_TEX 8192
+#define MAX_TEX GPU_MAX_TEX
 
 static int scale = 2;
 static SDL_Window *win;
@@ -306,6 +306,10 @@ typedef struct {
     float texsize[4], region[4];
 } DrawUniforms;
 
+static u64 up_bytes, up_count;
+static SDL_GPUTransferBuffer *txfer;        /* texture uploads */
+static u32 txfer_size;              /* texture uploads since the last stats line */
+
 static void upload_frame(SDL_GPUCommandBuffer *cmd, GpuFrame *f) {
     SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
     u32 vbytes = f->nverts * sizeof(GpuVertex);
@@ -329,28 +333,47 @@ static void upload_frame(SDL_GPUCommandBuffer *cmd, GpuFrame *f) {
         SDL_GPUBufferRegion dst = {vbuf, 0, vbytes};
         SDL_UploadToGPUBuffer(cp, &src, &dst, true);
     }
+    for (u32 i = 0; i < f->nfrees; i++) {
+        Tex *t = tex_slot(f->frees[i]);
+        if (t->tex) SDL_ReleaseGPUTexture(dev, t->tex);
+        t->tex = NULL;
+        t->id = 0;
+    }
+    /* all the frame's textures through one transfer buffer */
+    u64 total = 0;
+    for (u32 i = 0; i < f->nuploads; i++) total += (u64)f->uploads[i].w * f->uploads[i].h * 4;
+    if (total > txfer_size) {
+        if (txfer) SDL_ReleaseGPUTransferBuffer(dev, txfer);
+        txfer_size = (u32)(total + total / 2);
+        SDL_GPUTransferBufferCreateInfo ti = {SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, txfer_size, 0};
+        txfer = SDL_CreateGPUTransferBuffer(dev, &ti);
+        if (!txfer) rt_fatal(NULL, "GPU transfer buffer (%u bytes): %s", txfer_size, SDL_GetError());
+    }
+    u8 *map = total ? SDL_MapGPUTransferBuffer(dev, txfer, true) : NULL;
+    if (total && !map) rt_fatal(NULL, "GPU transfer buffer map: %s", SDL_GetError());
+    u32 off = 0;
     for (u32 i = 0; i < f->nuploads; i++) {
         GpuTexUpload *u = &f->uploads[i];
         Tex *t = tex_slot(u->id);
-        if (t->tex) SDL_ReleaseGPUTexture(dev, t->tex);
+        if (t->tex && (t->w != u->w || t->h != u->h)) { SDL_ReleaseGPUTexture(dev, t->tex); t->tex = NULL; }
         t->id = u->id;
         t->w = u->w;
         t->h = u->h;
-        t->tex = texture(u->w, u->h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        if (!t->tex) t->tex = texture(u->w, u->h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
         u32 bytes = u->w * u->h * 4;
-        SDL_GPUTransferBufferCreateInfo ti = {SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, bytes, 0};
-        SDL_GPUTransferBuffer *tb = SDL_CreateGPUTransferBuffer(dev, &ti);
-        memcpy(SDL_MapGPUTransferBuffer(dev, tb, false), u->px, bytes);
-        SDL_UnmapGPUTransferBuffer(dev, tb);
-        SDL_GPUTextureTransferInfo src = {tb, 0, u->w, u->h};
+        up_bytes += bytes;
+        up_count++;
+        memcpy(map + off, u->px, bytes);
+        SDL_GPUTextureTransferInfo src = {txfer, off, u->w, u->h};
         SDL_GPUTextureRegion dst = {0};
         dst.texture = t->tex;
         dst.w = u->w;
         dst.h = u->h;
         dst.d = 1;
         SDL_UploadToGPUTexture(cp, &src, &dst, false);
-        SDL_ReleaseGPUTransferBuffer(dev, tb);
+        off += bytes;
     }
+    if (map) SDL_UnmapGPUTransferBuffer(dev, txfer);
     SDL_EndGPUCopyPass(cp);
 }
 
@@ -362,6 +385,13 @@ void gpu_render(GpuFrame *f) {
         GpuVertex *v = &f->verts[d->first];
         rt_log("gpu", "frame %u: %u draws, %u verts, %u uploads; draw0 fbp %X zbp %X tex %d count %u v0 (%.1f %.1f %.4f) rgba %.0f %.0f %.0f %.0f",
                frame_no, f->ndraws, f->nverts, f->nuploads, d->fbp, d->zbp, d->tex, d->count, v->x, v->y, v->z, v->r, v->g, v->b, v->a);
+    }
+    if (getenv("SSTHEH_GPU_STATS") && frame_no % 50 == 0) {
+        u64 live_bytes, live = gpu_tex_stats(&live_bytes);
+        fprintf(stderr, "[gpu] frame %u: %u draws, %u verts; last 50 frames: %llu uploads, %.1f MB; live textures %llu, %.1f MB\n",
+               frame_no, f->ndraws, f->nverts, (unsigned long long)up_count, up_bytes / 1048576.0,
+               (unsigned long long)live, live_bytes / 1048576.0);
+        up_bytes = up_count = 0;
     }
     SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(dev);
     upload_frame(cmd, f);
@@ -438,14 +468,6 @@ void gpu_render(GpuFrame *f) {
     }
     if (rp) SDL_EndGPURenderPass(rp);
     SDL_SubmitGPUCommandBuffer(cmd);
-    /* textures unused for a while are dropped */
-    if ((frame_no & 255) == 0)
-        for (int i = 0; i < MAX_TEX; i++)
-            if (texs[i].tex && frame_no - texs[i].last_used > 600) {
-                SDL_ReleaseGPUTexture(dev, texs[i].tex);
-                texs[i].tex = NULL;
-                texs[i].id = 0;
-            }
 }
 
 /* ------------------------------------------------------------------------------- display */
