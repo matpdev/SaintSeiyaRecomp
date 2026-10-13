@@ -19,6 +19,7 @@
  * Flags: MAC (component i = x..w: zero bit 3-i, sign 7-i), status (Z S U O I D, sticky copies
  * 6-11), clip (6 bits per CLIP, the last four kept).
  */
+#include <immintrin.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,39 +58,47 @@ static u64 programs_run, pairs_run;
 
 static inline float clampf(float x) { return fpu(x); }
 
-static inline VF *R(Vu *v, int n) {
-    v->vf[0].f[0] = v->vf[0].f[1] = v->vf[0].f[2] = 0.0f;
-    v->vf[0].f[3] = 1.0f;
-    return &v->vf[n];
-}
+static inline VF *R(Vu *v, int n) { return &v->vf[n]; }   /* vf0 is set to (0, 0, 0, 1) when a program starts */
 
 /* ------------------------------------------------------------------------------- upper (FMAC) */
 
-static void set_flags(Vu *v, int dest, const float r[4]) {
-    u32 mac = 0;
-    for (int k = 0; k < 4; k++) {
-        if (!(dest & (8 >> k))) continue;
-        if (r[k] == 0.0f) mac |= 1u << (3 - k);
-        if (signbit(r[k])) mac |= 1u << (7 - k);
-    }
-    v->mac = mac;
-    u32 st = v->status & 0xFC0;
-    if (mac & 0x0F) st |= 0x41;
-    if (mac & 0xF0) st |= 0x82;
-    v->status = st;
+/* Each pair is decoded once (when first run after its code was uploaded) into a Dec; the upper
+ * operation then runs on all four components at once with SSE. Results are clamped to +-FLT_MAX
+ * (no infinities on the VU); denormals are flushed to zero by running with FTZ/DAZ set. */
+enum { UK_NOP, UK_ARITH, UK_OPMSUB, UK_OPMULA, UK_ITOF, UK_FTOI, UK_ABS, UK_CLIP };
+
+typedef struct {
+    u8 kind, op, bsrc, bc;      /* op: 0 add 1 sub 2 madd 3 msub 4 mul 5 max 6 mini; bsrc: 0 ft, 1 ft.bc, 2 I, 3 Q */
+    u8 dest, fs, ft, fd;
+    u8 to_acc, sc;              /* sc: ITOF/FTOI scale index */
+    u8 ibit, ebit, lnop;        /* lower word is a constant / end bit / lower is a NOP */
+    u8 valid;
+    u32 lo, hi;
+} Dec;
+
+static Dec decs[2][0x4000 / 8];
+
+void vu_code_written(int id, u32 addr, u32 bytes) {
+    Dec *d = decs[id & 1];
+    u32 n = (id & 1) ? 0x4000 / 8 : 0x1000 / 8;
+    for (u32 i = addr / 8; i <= (addr + bytes - 1) / 8 && i < addr / 8 + n; i++) d[i % n].valid = 0;
 }
 
-typedef struct { int kind; int reg; int dest; float val[4]; } UpperOut;   /* kind 0 none, 1 vf, 2 acc */
-
-static void upper(Vu *v, u32 w, UpperOut *o) {
-    int dest = (w >> 21) & 15, ft = (w >> 16) & 31, fs = (w >> 11) & 31, fd = (w >> 6) & 31;
-    int low = w & 0x3F, bc = w & 3;
-    const float *a = R(v, fs)->f, *t = R(v, ft)->f, *acc = v->acc.f;
-    float b[4], r[4];
-    o->kind = 0;
-    o->dest = dest;
-    int op = -1, to_acc = 0, bsrc = 0;    /* op: 0 add 1 sub 2 madd 3 msub 4 mul 5 max 6 mini; bsrc: 0 ft, 1 bc, 2 I, 3 Q */
-
+static void decode(Dec *d, u32 lo, u32 hi) {
+    memset(d, 0, sizeof *d);
+    d->lo = lo;
+    d->hi = hi;
+    d->ibit = hi >> 31;
+    d->ebit = (hi >> 30) & 1;
+    d->lnop = !d->ibit && lo == 0x8000033Cu;
+    d->valid = 1;
+    u32 w = hi;
+    d->dest = (w >> 21) & 15;
+    d->ft = (w >> 16) & 31;
+    d->fs = (w >> 11) & 31;
+    d->fd = (w >> 6) & 31;
+    d->bc = w & 3;
+    int low = w & 0x3F, op = -1, bsrc = 0;
     if (low < 0x3C) {
         if (low < 0x1C) {
             static const signed char f1[7] = {0, 1, 2, 3, 5, 6, 4};
@@ -114,51 +123,22 @@ static void upper(Vu *v, u32 w, UpperOut *o) {
             case 0x2B: op = 5; break;                    /* max */
             case 0x2C: op = 1; break;                    /* sub */
             case 0x2D: op = 3; break;                    /* msub */
-            case 0x2E:                                    /* opmsub */
-                r[0] = acc[0] - a[1] * t[2]; r[1] = acc[1] - a[2] * t[0]; r[2] = acc[2] - a[0] * t[1]; r[3] = 0;
-                for (int k = 0; k < 4; k++) o->val[k] = clampf(r[k]);
-                o->kind = 1; o->reg = fd; o->dest = 0xE;
-                set_flags(v, 0xE, o->val);
-                return;
+            case 0x2E: d->kind = UK_OPMSUB; return;      /* opmsub */
             case 0x2F: op = 6; break;                    /* mini */
             default: return;
         }
     } else {
         int s2 = ((w >> 6) & 0x1F) << 2 | (w & 3);
-        to_acc = 1;
+        d->to_acc = 1;
         if (s2 < 0x10) { op = s2 >> 2; bsrc = 1; }               /* adda/suba/madda/msuba + bc */
         else if (s2 >= 0x18 && s2 < 0x1C) { op = 4; bsrc = 1; }  /* mulabc */
         else switch (s2) {
-            case 0x10: case 0x11: case 0x12: case 0x13: {        /* itof */
-                static const float sc[4] = {1.0f, 1.0f / 16, 1.0f / 4096, 1.0f / 32768};
-                for (int k = 0; k < 4; k++) o->val[k] = (float)(s32)R(v, fs)->u[k] * sc[s2 & 3];
-                o->kind = 1; o->reg = ft;
-                return;
-            }
-            case 0x14: case 0x15: case 0x16: case 0x17: {        /* ftoi */
-                static const float sc[4] = {1.0f, 16.0f, 4096.0f, 32768.0f};
-                for (int k = 0; k < 4; k++) { s32 iv = fpu_cvtw(a[k] * sc[s2 & 3]); memcpy(&o->val[k], &iv, 4); }
-                o->kind = 1; o->reg = ft;
-                return;
-            }
+            case 0x10: case 0x11: case 0x12: case 0x13: d->kind = UK_ITOF; d->sc = s2 & 3; return;
+            case 0x14: case 0x15: case 0x16: case 0x17: d->kind = UK_FTOI; d->sc = s2 & 3; return;
             case 0x1C: op = 4; bsrc = 3; break;          /* mulaq */
-            case 0x1D:                                    /* abs */
-                for (int k = 0; k < 4; k++) o->val[k] = fabsf(a[k]);
-                o->kind = 1; o->reg = ft;
-                return;
+            case 0x1D: d->kind = UK_ABS; return;
             case 0x1E: op = 4; bsrc = 2; break;          /* mulai */
-            case 0x1F: {                                  /* clip.xyz fs, ft.w */
-                float lim = fabsf(t[3]);
-                u32 c = 0;
-                if (a[0] > lim) c |= 1;
-                if (a[0] < -lim) c |= 2;
-                if (a[1] > lim) c |= 4;
-                if (a[1] < -lim) c |= 8;
-                if (a[2] > lim) c |= 16;
-                if (a[2] < -lim) c |= 32;
-                v->clip = ((v->clip << 6) | c) & 0xFFFFFF;
-                return;
-            }
+            case 0x1F: d->kind = UK_CLIP; return;        /* clip.xyz fs, ft.w */
             case 0x20: op = 0; bsrc = 3; break;          /* addaq */
             case 0x21: op = 2; bsrc = 3; break;          /* maddaq */
             case 0x22: op = 0; bsrc = 2; break;          /* addai */
@@ -172,40 +152,133 @@ static void upper(Vu *v, u32 w, UpperOut *o) {
             case 0x2A: op = 4; break;                    /* mula */
             case 0x2C: op = 1; break;                    /* suba */
             case 0x2D: op = 3; break;                    /* msuba */
-            case 0x2E:                                    /* opmula */
-                o->val[0] = clampf(a[1] * t[2]); o->val[1] = clampf(a[2] * t[0]); o->val[2] = clampf(a[0] * t[1]); o->val[3] = 0;
-                o->kind = 2; o->dest = 0xE;
-                set_flags(v, 0xE, o->val);
-                return;
+            case 0x2E: d->kind = UK_OPMULA; return;      /* opmula */
             default: return;                             /* nop and the rest */
         }
     }
-    if (op < 0) return;
-    for (int k = 0; k < 4; k++)
-        b[k] = bsrc == 0 ? t[k] : bsrc == 1 ? t[bc] : bsrc == 2 ? v->i : v->q;
-    for (int k = 0; k < 4; k++) {
-        switch (op) {
-        case 0: r[k] = a[k] + b[k]; break;
-        case 1: r[k] = a[k] - b[k]; break;
-        case 2: r[k] = acc[k] + a[k] * b[k]; break;
-        case 3: r[k] = acc[k] - a[k] * b[k]; break;
-        case 4: r[k] = a[k] * b[k]; break;
-        case 5: r[k] = a[k] > b[k] ? a[k] : b[k]; break;
-        default: r[k] = a[k] < b[k] ? a[k] : b[k]; break;
-        }
-        o->val[k] = (op >= 5) ? r[k] : clampf(r[k]);
-    }
-    o->kind = to_acc ? 2 : 1;
-    o->reg = fd;
-    if (op < 5) set_flags(v, dest, o->val);
+    d->kind = UK_ARITH;
+    d->op = (u8)op;
+    d->bsrc = (u8)bsrc;
 }
 
-static void commit_upper(Vu *v, const UpperOut *o) {
-    if (o->kind == 0) return;
-    float *d = o->kind == 2 ? v->acc.f : (o->reg ? v->vf[o->reg].f : NULL);
-    if (!d) return;
-    for (int k = 0; k < 4; k++)
-        if (o->dest & (8 >> k)) d[k] = o->val[k];
+/* dest (x = bit 3) -> lane mask; movemask (x = bit 0) -> MAC order (x = bit 3) */
+static __m128 dest_mask[16];
+static u8 rev4[16];
+
+static void tables_init(void) {
+    static int done;
+    if (done) return;
+    done = 1;
+    for (int m = 0; m < 16; m++) {
+        u32 l[4];
+        for (int k = 0; k < 4; k++) l[k] = (m & (8 >> k)) ? ~0u : 0;
+        memcpy(&dest_mask[m], l, 16);
+        rev4[m] = (u8)(((m & 1) << 3) | ((m & 2) << 1) | ((m & 4) >> 1) | ((m & 8) >> 3));
+    }
+}
+
+static inline __m128 vclamp(__m128 r) {
+    const __m128 hi = _mm_set1_ps(3.40282347e38f), lo = _mm_set1_ps(-3.40282347e38f);
+    return _mm_min_ps(_mm_max_ps(r, lo), hi);
+}
+
+static inline void set_flags(Vu *v, int dest, __m128 r) {
+    u32 z = rev4[_mm_movemask_ps(_mm_cmpeq_ps(r, _mm_setzero_ps()))] & dest;
+    u32 sg = rev4[_mm_movemask_ps(r)] & dest;
+    u32 mac = sg << 4 | z;
+    v->mac = mac;
+    u32 st = v->status & 0xFC0;
+    if (z) st |= 0x41;
+    if (sg) st |= 0x82;
+    v->status = st;
+}
+
+typedef struct { float *dst; __m128 val; int dest; } UpperOut;   /* dst NULL: nothing to write */
+
+static inline void upper(Vu *v, const Dec *d, UpperOut *o) {
+    o->dst = NULL;
+    o->dest = d->dest;
+    switch (d->kind) {
+    case UK_ARITH: {
+        __m128 a = _mm_load_ps(v->vf[d->fs].f), b, r;
+        switch (d->bsrc) {
+        case 0: b = _mm_load_ps(v->vf[d->ft].f); break;
+        case 1: b = _mm_set1_ps(v->vf[d->ft].f[d->bc]); break;
+        case 2: b = _mm_set1_ps(v->i); break;
+        default: b = _mm_set1_ps(v->q); break;
+        }
+        switch (d->op) {
+        case 0: r = _mm_add_ps(a, b); break;
+        case 1: r = _mm_sub_ps(a, b); break;
+        case 2: r = _mm_add_ps(_mm_load_ps(v->acc.f), _mm_mul_ps(a, b)); break;
+        case 3: r = _mm_sub_ps(_mm_load_ps(v->acc.f), _mm_mul_ps(a, b)); break;
+        case 4: r = _mm_mul_ps(a, b); break;
+        case 5: r = _mm_max_ps(a, b); break;
+        default: r = _mm_min_ps(a, b); break;
+        }
+        if (d->op < 5) {
+            r = vclamp(r);
+            set_flags(v, d->dest, r);
+        }
+        o->val = r;
+        o->dst = d->to_acc ? v->acc.f : d->fd ? v->vf[d->fd].f : NULL;
+        return;
+    }
+    case UK_OPMSUB: case UK_OPMULA: {
+        const float *a = v->vf[d->fs].f, *t = v->vf[d->ft].f, *acc = v->acc.f;
+        __m128 r = d->kind == UK_OPMSUB
+            ? _mm_setr_ps(acc[0] - a[1] * t[2], acc[1] - a[2] * t[0], acc[2] - a[0] * t[1], 0)
+            : _mm_setr_ps(a[1] * t[2], a[2] * t[0], a[0] * t[1], 0);
+        r = vclamp(r);
+        set_flags(v, 0xE, r);
+        o->val = r;
+        o->dest = 0xE;
+        o->dst = d->kind == UK_OPMULA ? v->acc.f : d->fd ? v->vf[d->fd].f : NULL;
+        return;
+    }
+    case UK_ITOF: {
+        static const float sc[4] = {1.0f, 1.0f / 16, 1.0f / 4096, 1.0f / 32768};
+        __m128i x = _mm_load_si128((const __m128i *)v->vf[d->fs].u);
+        o->val = _mm_mul_ps(_mm_cvtepi32_ps(x), _mm_set1_ps(sc[d->sc]));
+        o->dst = d->ft ? v->vf[d->ft].f : NULL;
+        return;
+    }
+    case UK_FTOI: {
+        static const float sc[4] = {1.0f, 16.0f, 4096.0f, 32768.0f};
+        float in[4];
+        s32 iv[4];
+        _mm_storeu_ps(in, _mm_mul_ps(_mm_load_ps(v->vf[d->fs].f), _mm_set1_ps(sc[d->sc])));
+        for (int k = 0; k < 4; k++) iv[k] = fpu_cvtw(in[k]);
+        o->val = _mm_castsi128_ps(_mm_loadu_si128((const __m128i *)iv));
+        o->dst = d->ft ? v->vf[d->ft].f : NULL;
+        return;
+    }
+    case UK_ABS:
+        o->val = _mm_andnot_ps(_mm_set1_ps(-0.0f), _mm_load_ps(v->vf[d->fs].f));
+        o->dst = d->ft ? v->vf[d->ft].f : NULL;
+        return;
+    case UK_CLIP: {
+        const float *a = v->vf[d->fs].f;
+        float lim = fabsf(v->vf[d->ft].f[3]);
+        u32 c = 0;
+        if (a[0] > lim) c |= 1;
+        if (a[0] < -lim) c |= 2;
+        if (a[1] > lim) c |= 4;
+        if (a[1] < -lim) c |= 8;
+        if (a[2] > lim) c |= 16;
+        if (a[2] < -lim) c |= 32;
+        v->clip = ((v->clip << 6) | c) & 0xFFFFFF;
+        return;
+    }
+    default: return;
+    }
+}
+
+static inline void commit_upper(const UpperOut *o) {
+    if (!o->dst) return;
+    __m128 m = dest_mask[o->dest];
+    __m128 old = _mm_load_ps(o->dst);
+    _mm_store_ps(o->dst, _mm_or_ps(_mm_and_ps(m, o->val), _mm_andnot_ps(m, old)));
 }
 
 /* ------------------------------------------------------------------------------- lower */
@@ -377,23 +450,33 @@ static void run(Vu *v) {
     int ending = 0, branch_pending = 0;
     u32 branch_target = 0;
     programs_run++;
+    tables_init();
+    v->vf[0].f[0] = v->vf[0].f[1] = v->vf[0].f[2] = 0.0f;
+    v->vf[0].f[3] = 1.0f;
+    u32 csr = _mm_getcsr();
+    _mm_setcsr(csr | 0x8040);                        /* FTZ | DAZ: denormals are zero, as on the VU */
+    Dec *decv = decs[v->id];
     for (int guard = 0; guard < 1 << 22; guard++) {
         u32 pc = v->pc & v->code_mask;
-        u32 lo, hi;
-        memcpy(&lo, v->code + pc, 4);
-        memcpy(&hi, v->code + pc + 4, 4);
+        Dec *d = &decv[pc / 8];
+        if (!d->valid) {
+            u32 lo, hi;
+            memcpy(&lo, v->code + pc, 4);
+            memcpy(&hi, v->code + pc + 4, 4);
+            decode(d, lo, hi);
+        }
         v->pc = (pc + 8) & v->code_mask;
         pairs_run++;
         if (v->q_wait && --v->q_wait == 0) v->q = v->q_next;
         if (v->p_wait && --v->p_wait == 0) v->p = v->p_next;
 
         UpperOut uo;
-        upper(v, hi, &uo);
+        upper(v, d, &uo);
         int taken = 0;
         u32 target = 0;
-        if (hi & 0x80000000u) memcpy(&v->i, &lo, 4);   /* I bit: the lower word is a constant */
-        else taken = lower(v, lo, pc, &target);
-        commit_upper(v, &uo);
+        if (d->ibit) memcpy(&v->i, &d->lo, 4);           /* I bit: the lower word is a constant */
+        else if (!d->lnop) taken = lower(v, d->lo, pc, &target);
+        commit_upper(&uo);
         flags_advance(v);
 
         if (branch_pending) {
@@ -402,10 +485,11 @@ static void run(Vu *v) {
         }
         if (taken) { branch_pending = 1; branch_target = target; }
         if (ending) break;
-        if (hi & 0x40000000u) ending = 1;               /* E: one more pair, then stop */
+        if (d->ebit) ending = 1;                         /* E: one more pair, then stop */
     }
     if (v->q_wait) { v->q = v->q_next; v->q_wait = 0; }
     if (v->p_wait) { v->p = v->p_next; v->p_wait = 0; }
+    _mm_setcsr(csr);
 }
 
 void vu_start(int id, int addr, u32 itop) {

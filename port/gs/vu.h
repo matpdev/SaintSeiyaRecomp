@@ -13,7 +13,8 @@ extern u8 vu0_mem[0x1000], vu0_code[0x1000];
 
 void vu_unpack(int vu, const VuUnpack *u, const u32 *data);
 void vu_load_program(int vu, u32 addr, const u32 *words, u32 count);
-void vu_start(int vu, int addr, u32 itop);        /* addr -1: continue where the last program stopped */
+void vu_start(int vu, int addr, u32 itop);
+void vu_code_written(int vu, u32 addr, u32 bytes);  /* vu_exec.c: forget decoded pairs there */        /* addr -1: continue where the last program stopped */
 extern u32 vu1_top;                               /* VIF1 TOP, read by XTOP */
 void vu_stats(void);
 

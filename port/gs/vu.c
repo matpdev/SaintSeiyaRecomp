@@ -24,6 +24,7 @@ void vu_load_program(int vu, u32 addr, const u32 *words, u32 count) {
     u8 *code = vu ? vu1_code : vu0_code;
     u32 size = vu ? sizeof vu1_code : sizeof vu0_code;
     for (u32 i = 0; i < count; i++) memcpy(code + ((addr + i * 4) & (size - 1)), &words[i], 4);   /* addr in bytes */
+    vu_code_written(vu, addr & (size - 1), count * 4);
 }
 
 void vu_unpack(int vu, const VuUnpack *u, const u32 *data) {
