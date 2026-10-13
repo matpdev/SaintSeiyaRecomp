@@ -11,6 +11,8 @@ void sif_init(void);
 void iop_init(void);
 /* An EE -> IOP transfer (SifSetDma): copy, and run the command if it went to the command buffer. */
 void iop_receive(Ctx *c, u32 ee_src, u32 iop_dst, u32 size);
+/* cri_adxi.c: answers the CRI sound driver's buffer exchanges (DTX) when they arrive */
+void cri_adxi_dma(Ctx *c, u32 iop_dst, u32 size);
 /* Deliver queued IOP -> EE packets; called by the kernel with interrupts allowed. */
 int iop_pending(void);
 void iop_deliver(Ctx *c, void (*raise_sif0)(Ctx *c));

@@ -261,6 +261,7 @@ static void command(Ctx *c, u32 iop_addr) {
 void iop_receive(Ctx *c, u32 src, u32 dst, u32 size) {
     dst &= IOP_RAM_SIZE - 1;
     for (u32 i = 0; i < size; i++) iop_ram[(dst + i) & (IOP_RAM_SIZE - 1)] = rd8(c, src + i);
+    cri_adxi_dma(c, dst, size);
     if (dst == IOP_CMD_BUFFER) {
         command(c, dst);
         ee_job_next(c);

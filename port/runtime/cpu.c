@@ -103,7 +103,7 @@ static void count_call(u32 addr) {
         for (u32 i = 0; i < 0x100000; i++) if (counts[i]) idx[n++] = i;
         u32 *keep = counts;
         qsort(idx, n, 4, by_count);
-        for (u32 i = 0; i < n && i < 300; i++) {
+        for (u32 i = 0; i < n; i++) {
             const FuncEntry *f = rt_find(0x00100000 + idx[i] * 4);
             fprintf(stderr, "[count] %08X %9u %s\n", 0x00100000 + idx[i] * 4, keep[idx[i]], f ? f->name : "?");
         }
