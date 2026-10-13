@@ -18,6 +18,7 @@
 int cdvd_open(const char *path);
 int display_window(void);
 int display_shots(const int *at, int n);
+void display_set_presses(const char *spec);
 
 static u32 entry;
 
@@ -36,6 +37,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "-v")) rt_verbose = 2;
         else if (!strcmp(argv[i], "-vv")) rt_verbose = 3;
         else if (!strcmp(argv[i], "--trace")) rt_trace_on = 1;
+        else if (!strcmp(argv[i], "--press") && i + 1 < argc) display_set_presses(argv[++i]);
         else if (!strcmp(argv[i], "--shot") && i + 1 < argc) {
             /* --shot 100,200,300: save the picture at those vertical blanks, no window */
             for (char *p = argv[++i]; *p && nshots < 64; p++) {

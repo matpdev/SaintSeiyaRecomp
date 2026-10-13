@@ -25,6 +25,7 @@
 #include "kernel.h"
 #include "iop.h"
 #include "gs.h"
+#include "pad.h"
 
 #define MAX_THREADS 256
 #define MAX_SEMAS 256
@@ -225,6 +226,7 @@ static void run_interrupts(void) {
     if (!timer_vblank) { in_irq = 0; return; }
     timer_vblank = 0;
     vblanks++;
+    pad_vblank(&irq_ctx);
     hsyncs += 312;
     if (intc_mask & (1 << 2)) run_handlers(intc, 2);       /* VBLANK_START */
     if (intc_mask & (1 << 3)) run_handlers(intc, 3);       /* VBLANK_END */

@@ -10,6 +10,7 @@
 #include "r5900.h"
 #include "runtime.h"
 #include "iop.h"
+#include "pad.h"
 
 static void dump_request(const char *name, u32 fn, const u8 *in, u32 in_size, u32 out_size) {
     char text[80];
@@ -71,7 +72,17 @@ GENERIC(srv_cdvd_s, "cdvd-scmd")
 GENERIC(srv_cdvd_n, "cdvd-ncmd")
 GENERIC(srv_cdvd_search, "cdvd-search")
 GENERIC(srv_cdvd_ready, "cdvd-ready")
-GENERIC(srv_pad, "pad")
+static u32 srv_pad(Ctx *c, u32 fn, u8 *in, u32 in_size, u8 *out, u32 out_size) {
+    (void)c; (void)out;
+    if (fn == 1 && rd(in, 0) == 0x01) pad_open(rd(in, 4), rd(in, 8), rd(in, 0x10));
+    /* the result of every pad command is the reply's word 3 (scePadPortOpen: 1 = opened) */
+    if (out_size >= 16) { memset(out, 0, 16); wr(out, 12, 1); }
+    char hex[200];
+    int k = 0;
+    for (u32 i = 0; i < 48 && i < in_size; i += 4) k += snprintf(hex + k, sizeof hex - k, "%08X ", rd(in, i));
+    rt_log("iop", "pad fn %u, %u in, %u out: %s", fn, in_size, out_size, hex);
+    return out_size >= 16 ? 16 : 0;
+}
 GENERIC(srv_pad_ext, "pad-ext")
 GENERIC(srv_mc, "mcserv")
 GENERIC(srv_libsd, "libsd")
