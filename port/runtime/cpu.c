@@ -79,7 +79,45 @@ void rt_di(Ctx *c) { (void)c; cop0_status &= ~0x10000u; }
 int rt_trace_on;
 static u8 called[(0x00500000 - 0x00100000) / 4 / 8];
 
+/* SSTHEH_TRACE_COUNT=from,to (vertical blanks, with --trace): calls per function in that window,
+ * printed at its end, most called first */
+static u32 *counts, count_from, count_to;
+
+static int by_count(const void *a, const void *b) {
+    u32 x = counts[*(const u32 *)a], y = counts[*(const u32 *)b];
+    return x < y ? 1 : x > y ? -1 : 0;
+}
+
+static void count_call(u32 addr) {
+    static int init;
+    if (!init) {
+        init = 1;
+        const char *e = getenv("SSTHEH_TRACE_COUNT");
+        if (e && sscanf(e, "%u,%u", &count_from, &count_to) == 2) counts = calloc(0x100000, 4);
+    }
+    if (!counts) return;
+    u32 vb = kernel_vblank_count();
+    if (vb >= count_to) {
+        static u32 idx[0x100000];
+        u32 n = 0;
+        for (u32 i = 0; i < 0x100000; i++) if (counts[i]) idx[n++] = i;
+        u32 *keep = counts;
+        qsort(idx, n, 4, by_count);
+        for (u32 i = 0; i < n && i < 300; i++) {
+            const FuncEntry *f = rt_find(0x00100000 + idx[i] * 4);
+            fprintf(stderr, "[count] %08X %9u %s\n", 0x00100000 + idx[i] * 4, keep[idx[i]], f ? f->name : "?");
+        }
+        counts = NULL;
+        return;
+    }
+    if (vb >= count_from) {
+        u32 i = (addr - 0x00100000) / 4;
+        if (i < 0x100000) counts[i]++;
+    }
+}
+
 void rt_enter(Ctx *c, u32 addr) {
+    count_call(addr);
     u32 i = (addr - 0x00100000) / 4;
     if (i >= sizeof called * 8 || called[i / 8] & (1 << (i % 8))) return;
     called[i / 8] |= 1 << (i % 8);

@@ -12,7 +12,10 @@
  *   answers only then).
  * Buttons (bit of the 16-bit word, active low): SELECT 0, L3 1, R3 2, START 3, UP 4, RIGHT 5,
  * DOWN 6, LEFT 7, L2 8, R2 9, L1 10, R1 11, TRIANGLE 12, CIRCLE 13, CROSS 14, SQUARE 15.
+ * Only port 1 has a controller unless SSTHEH_PAD2=1: with both, game modes become 1P vs 2P. An
+ * empty port reports state 0 (PAD_STATE_DISCONN).
  */
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -43,6 +46,15 @@ void pad_vblank(Ctx *c) {
     for (int port = 0; port < 2; port++) {
         if (!area[port]) continue;
         u8 r[128] = {0};
+        static int pad2 = -1;
+        if (pad2 < 0) pad2 = getenv("SSTHEH_PAD2") && atoi(getenv("SSTHEH_PAD2"));
+        if (port == 1 && !pad2) {
+            r[0x00] = 0xFF;
+            memcpy(r + 0x58, &frame, 4);
+            r[0x70] = 0;                     /* PAD_STATE_DISCONN */
+            put(c, area[port] + (frame & 1) * 128, r, 128);
+            continue;
+        }
         u16 btn = (u16)~pad_buttons[port];
         r[0x00] = 0x00;
         r[0x01] = 0x73;                      /* DualShock, analog: 3 words of data */
