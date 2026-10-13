@@ -1,0 +1,77 @@
+# splat configuration for Saint Seiya: The Hades (Europe), SLES_541.62
+# sha1 7ba6b0a1c05a94f28452840fcb73c204e46e79e6 (config/SLES_541.62.sha1)
+#
+# The ELF has no section headers worth using: one PT_LOAD segment at 0x100000 holds
+# .text, VU1 microcode, .data/.rodata and .sdata; .sbss/.bss follow up to 0x53C100.
+# Code regions are labelled by compiler (see docs/recon.md): Metrowerks (game, C++) or ee-gcc (Sony SDK, CRI).
+name: SLES_541.62
+sha1: 7ba6b0a1c05a94f28452840fcb73c204e46e79e6
+options:
+  basename: SLES_541.62
+  target_path: disc/SLES_541.62
+  base_path: ..
+  platform: ps2
+  compiler: MWCCPS2
+
+  asm_path: asm
+  src_path: src
+  build_path: build
+  ld_script_path: build/SLES_541.62.ld
+
+  symbol_addrs_path: [config/symbol_addrs.txt]
+  undefined_funcs_auto_path: config/undefined_funcs_auto.txt
+  undefined_syms_auto_path: config/undefined_syms_auto.txt
+
+  gp_value: 0x507770
+  find_file_boundaries: False
+  create_undefined_funcs_auto: True
+  create_undefined_syms_auto: True
+  disasm_unknown: True
+  string_encoding: ASCII
+  rodata_string_guesser_level: 2
+  data_string_guesser_level: 2
+  named_regs_for_c_funcs: False
+  migrate_rodata_to_functions: False
+  section_order: [".text", ".vutext", ".data", ".rodata", ".sdata", ".sbss", ".bss"]
+  ld_bss_is_noload: True
+
+segments:
+  - name: elf_header
+    type: databin
+    start: 0x0
+
+  - name: main
+    type: code
+    start: 0x80
+    vram: 0x100000
+    subalign: null
+    subsegments:
+      - [0x80,     asm, start]            # 0x100000 crt0 + Metrowerks startup
+      - [0x4598,   asm, sdk_ipu]          # 0x104518 ee-gcc: Sony libs (IPU/MPEG, DMA, ...)
+      - [0x37520,  asm, main]             # 0x1374A0 Metrowerks: main
+      - [0x37720,  asm, sdk_b]            # 0x1376A0 ee-gcc
+      - [0x38BA0,  asm, game_a]           # 0x138B20 Metrowerks: game code
+      - [0x140C50, asm, cri]              # 0x240BD0 ee-gcc: CRI ADX/SFD/CVFS, Sony libs
+      - [0x19C810, asm, game_b]           # 0x29C790 Metrowerks: game code + MW runtime
+      - [0x2C7000, bin, vu1_microcode]    # 0x3C6F80 VIF/MPG packets with VU1 programs
+      - [0x2D6580, data, data_a]          # 0x3D6500 .data/.rodata (incl. libkernl kernel blobs)
+
+  # Second part of the same PT_LOAD segment: code placed after .data by the linker.
+  - name: main2
+    type: code
+    start: 0x3BE780
+    vram: 0x4BE700
+    bss_size: 0x3C080          # 0x500080 .. 0x53C100
+    subalign: null
+    subsegments:
+      - [0x3BE780, asm, sinit]            # 0x4BE700 Metrowerks C++ static initialisers
+      - [0x3C8730, data, data_b]          # 0x4C86B0 .data
+      - [0x3FF7F0, sdata, sdata]          # 0x4FF770 small data ($gp - 0x8000)
+      - { start: 0x400100, type: bss, vram: 0x500080, name: bss }
+
+  # .shstrtab, .comment, .reginfo and the section header table
+  - name: elf_tail
+    type: databin
+    start: 0x400100
+
+  - [0x4002B0]

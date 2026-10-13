@@ -1,0 +1,16 @@
+/disc/*
+!/disc/README.md
+/.venv/
+/tools/dl/
+/tools/compilers/
+/tools/binutils/
+/tools/build-binutils/
+/tools/wibo
+/build/
+/asm/
+/assets/
+*.o
+__pycache__/
+build.ninja
+.ninja_log
+.ninja_deps

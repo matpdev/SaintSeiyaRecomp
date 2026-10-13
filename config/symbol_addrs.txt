@@ -1,0 +1,3 @@
+entry = 0x100008; // type:func
+main = 0x137510; // type:func
+exit = 0x1254E0; // type:func
