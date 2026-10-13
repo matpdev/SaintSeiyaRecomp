@@ -512,7 +512,16 @@ static u32 gif(GifState *st, const u8 *p, u32 qwc, int stop_at_eop) {
 
 void gif_path1(const u8 *vu_mem, u32 addr) {
     static u8 buf[0x4000 * 2];
+    static int told;
     u32 a = (addr & 0x3FF) * 16;
+    if (rt_verbose > 1 && told < 40) {
+        u64 t[2];
+        memcpy(t, vu_mem + a, 16);
+        told++;
+        rt_log("gif", "XGKICK %03X: tag %016llX %016llX (nloop %u eop %u pre %u prim %03X flg %u nreg %u)", addr & 0x3FF,
+               (unsigned long long)t[0], (unsigned long long)t[1], (unsigned)(t[0] & 0x7FFF), (unsigned)((t[0] >> 15) & 1),
+               (unsigned)((t[0] >> 46) & 1), (unsigned)((t[0] >> 47) & 0x7FF), (unsigned)((t[0] >> 58) & 3), (unsigned)((t[0] >> 60) & 15));
+    }
     memcpy(buf, vu_mem + a, 0x4000 - a);
     memcpy(buf + (0x4000 - a), vu_mem, a);
     paths[0].tag_lo = 0;
@@ -555,3 +564,9 @@ int gs_display(u32 *out, int max_w, int max_h, int *w, int *h) {
 void gs_init(void) { tables_init(); }
 
 u64 gs_stats_tags(void) { return gif_tags; }
+
+/* All of GS memory seen as one 1024 x 1024 buffer of 32-bit pixels (tests). */
+void gs_dump_vram(u32 *out) {
+    for (u32 y = 0; y < 1024; y++)
+        for (u32 x = 0; x < 1024; x++) out[y * 1024 + x] = vram_rw(0, 16, 0, x, y, 0, 0) | 0xFF000000u;
+}

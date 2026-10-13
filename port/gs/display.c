@@ -19,6 +19,7 @@
 int gs_display(u32 *out, int max_w, int max_h, int *w, int *h);
 void gs_init(void);
 void vif_stats(void);
+void vu_stats(void);
 extern u64 gs_prims;
 
 static u32 frame[1024 * 1024];
@@ -128,9 +129,20 @@ int display_shots(const int *at, int n) {
         char path[64];
         snprintf(path, sizeof path, "build/shot_%04d.ppm", at[k]);
         save_ppm(path, frame, w, h);
+        if (getenv("SSTHEH_VRAM")) {
+            void gs_dump_vram(u32 *out);
+            gs_dump_vram(frame);
+            snprintf(path, sizeof path, "build/vram_%04d.ppm", at[k]);
+            save_ppm(path, frame, 1024, 1024);
+            rt_log("gs", "PMODE %llX DISPFB1 %llX DISPLAY1 %llX DISPFB2 %llX DISPLAY2 %llX",
+                   (unsigned long long)gs_priv_read(0), (unsigned long long)gs_priv_read(0x70),
+                   (unsigned long long)gs_priv_read(0x80), (unsigned long long)gs_priv_read(0x90),
+                   (unsigned long long)gs_priv_read(0xA0));
+        }
         rt_log("gs", "%s (%dx%d), %llu primitives so far", path, w, h, (unsigned long long)gs_prims);
     }
     vif_stats();
+    vu_stats();
     return 0;
 }
 

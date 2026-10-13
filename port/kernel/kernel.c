@@ -82,7 +82,7 @@ void rt_log(const char *area, const char *fmt, ...) {
     if (!rt_verbose) return;
     va_list ap;
     va_start(ap, fmt);
-    fprintf(stderr, "[%-6s] ", area);
+    fprintf(stderr, "[%-6s %5u] ", area, vblanks);
     vfprintf(stderr, fmt, ap);
     fputc('\n', stderr);
     va_end(ap);

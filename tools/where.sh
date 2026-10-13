@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 secs=${1:-10}
 out=build/where.txt
 timeout $((secs + 20)) gdb -q -batch -ex 'set debuginfod enabled off' -ex 'set print thread-events off' \
-    -ex run -ex 'thread apply all bt 12' --args ./build/sstheh -q > $out 2>&1 &
+    -ex run -ex 'thread apply all bt 12' --args ./build/sstheh -q $WHERE_ARGS > $out 2>&1 &
 sleep "$secs"
 pkill -INT -f 'build/sstheh -q'
 sleep 3

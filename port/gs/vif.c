@@ -25,6 +25,7 @@ typedef struct {
     u32 need, got;          /* words still to collect for it */
     u32 buf[0x10000];
     u32 cl, wl, mode, mask, row[4], col[4], base, ofst, tops, itop, num_unpack;
+    int dbf;                /* VIF1 double buffering: which half TOPS points to */
     u64 counts[128];
 } Vif;
 
@@ -48,13 +49,24 @@ static void run(Vif *v, u32 code, const u32 *data) {
     switch (cmd) {
     case 0x00: break;
     case 0x01: v->cl = imm & 0xFF; v->wl = (imm >> 8) & 0xFF; break;
-    case 0x02: v->ofst = imm & 0x3FF; break;
-    case 0x03: v->base = imm & 0x3FF; break;
+    case 0x02: v->ofst = imm & 0x3FF; v->dbf = 0; v->tops = v->base; break;
+    case 0x03: v->base = imm & 0x3FF; v->dbf = 0; v->tops = v->base; break;
     case 0x04: v->itop = imm & 0x3FF; break;
     case 0x05: v->mode = imm & 3; break;
     case 0x06: case 0x07: case 0x10: case 0x11: case 0x13: break;
-    case 0x14: case 0x15: vu_start(v->id, imm, v->itop); break;          /* MSCAL / MSCALF */
-    case 0x17: vu_start(v->id, -1, v->itop); break;                      /* MSCNT: continue */
+    case 0x14: case 0x15: case 0x17:                                      /* MSCAL / MSCALF / MSCNT */
+        if (v->id == 1) {
+            vu1_top = v->tops;                                            /* what XTOP reads */
+            v->dbf ^= 1;
+            v->tops = v->dbf ? v->base + v->ofst : v->base;
+        }
+        {
+            static int told;
+            if (rt_verbose > 1 && v->id == 1 && told++ < 30)
+                rt_log("vif", "MSCAL %03X top %03X itop %03X base %03X ofst %03X", imm, vu1_top, v->itop, v->base, v->ofst);
+        }
+        vu_start(v->id, cmd == 0x17 ? -1 : (int)imm, v->itop);
+        break;
     case 0x20: v->mask = data[0]; break;
     case 0x30: memcpy(v->row, data, 16); break;
     case 0x31: memcpy(v->col, data, 16); break;
@@ -62,8 +74,12 @@ static void run(Vif *v, u32 code, const u32 *data) {
     case 0x50: case 0x51: if (v->id == 1) gif_path2((const u8 *)data, imm ? imm : 0x10000); break;
     default:
         if (cmd >= 0x60) {
+            static int told;
+            if (rt_verbose > 1 && v->id == 1 && told++ < 30)
+                rt_log("vif", "UNPACK %02X addr %03X num %u flg %u usn %u tops %03X cl %u wl %u mode %u", cmd, code & 0x3FF,
+                       num, (code >> 15) & 1, (code >> 14) & 1, v->tops, v->cl, v->wl, v->mode);
             VuUnpack u = {.cmd = code, .cl = v->cl, .wl = v->wl, .mode = v->mode, .mask = v->mask,
-                          .row = v->row, .col = v->col, .tops_add = (v->id == 1 && (code & 0x8000)) ? v->base : 0};
+                          .row = v->row, .col = v->col, .tops_add = (v->id == 1 && (code & 0x8000)) ? v->tops : 0};
             vu_unpack(v->id, &u, data);
         } else {
             static u8 told[128];
