@@ -7,9 +7,11 @@
  * next pair. Branches have one delay pair.
  *
  * Timing: the hardware stalls on FMAC register dependencies, so executing pairs in order gives the
- * same results, except for Q (DIV/SQRT/RSQRT), which is written after a latency without a stall
- * (7 or 13 cycles); that latency is modelled, one cycle per pair. Within a pair the lower half
- * runs before the upper half's result is written.
+ * same results, except for what is written after a latency without a stall: Q (DIV/SQRT/RSQRT,
+ * 7 or 13 cycles), P (EFU, 11 to 54 cycles), and the MAC, status and clip flags, which the flag instructions (FMAND, FCAND,
+ * ...) see 4 cycles after the FMAC operation that set them; pipelined loops rely on that (e.g.
+ * FCAND reading the CLIP of the vertex before). Both are modelled, one cycle per pair. Within a
+ * pair the lower half runs before the upper half's result is written.
  *
  * Upper encoding (as COP2 macro mode): dest 21-24, ft 16-20, fs 11-15, fd 6-10, operation 0-5
  * (0x3C-0x3F: ((bits 6-10) << 2 | bits 0-1)). Lower: opcode 25-31 (0x40: operation in 0-5, or
@@ -35,7 +37,11 @@ typedef struct {
     float q, p, i, r;
     float q_next;
     int q_wait;                 /* pairs until q_next lands in q */
-    u32 mac, status, clip;
+    float p_next;
+    int p_wait;                 /* pairs until p_next lands in p (EFU) */
+    u32 mac, status, clip;      /* as the FMAC pipeline leaves them */
+    u32 fl_mac[4], fl_status[4], fl_clip[4];  /* after each of the last 4 pairs: what flag reads see */
+    u32 fl_pos;
     u32 pc;                     /* in bytes */
     u8 *mem, *code;
     u32 mem_mask, code_mask;
@@ -214,9 +220,27 @@ static void store_vf(Vu *v, int reg, int dest, const u32 val[4]) {
         if (dest & (8 >> k)) v->vf[reg].u[k] = tmp[k];
 }
 
+static void set_p(Vu *v, float x, int latency) {
+    v->p_next = x;
+    v->p_wait = latency;
+}
+
 static void set_q(Vu *v, float x, int latency) {
     v->q_next = clampf(x);
     v->q_wait = latency;
+}
+
+/* Flag pipeline: fl_*[fl_pos] holds the flags as they were 4 pairs ago (what reads see); after
+ * each pair the current ones replace it. */
+static void flags_set_all(Vu *v) {
+    for (int k = 0; k < 4; k++) { v->fl_mac[k] = v->mac; v->fl_status[k] = v->status; v->fl_clip[k] = v->clip; }
+}
+
+static inline void flags_advance(Vu *v) {
+    v->fl_mac[v->fl_pos] = v->mac;
+    v->fl_status[v->fl_pos] = v->status;
+    v->fl_clip[v->fl_pos] = v->clip;
+    v->fl_pos = (v->fl_pos + 1) & 3;
 }
 
 /* Returns 1 for a taken branch, with the target (bytes) in *target. */
@@ -229,6 +253,7 @@ static int lower(Vu *v, u32 w, u32 pc, u32 *target) {
 #define VI(n) (((n) & 15) ? vi[(n) & 15] : 0)
 #define SETVI(n, x) do { if ((n) & 15) vi[(n) & 15] = (u16)(x); } while (0)
 #define BR(cond) do { if (cond) { *target = pc + 8 + imm11 * 8; return 1; } return 0; } while (0)
+    u32 seen_mac = v->fl_mac[v->fl_pos], seen_status = v->fl_status[v->fl_pos], seen_clip = v->fl_clip[v->fl_pos];
     switch (op) {
     case 0x00: { u32 val[4]; memcpy(val, qw(v, (u32)(VI(is) + imm11)), 16); store_vf(v, it, dest, val); return 0; }  /* LQ */
     case 0x01: {                                                                                                     /* SQ */
@@ -249,18 +274,18 @@ static int lower(Vu *v, u32 w, u32 pc, u32 *target) {
     }
     case 0x08: SETVI(it, VI(is) + imm15); return 0;                                     /* IADDIU */
     case 0x09: SETVI(it, VI(is) - imm15); return 0;                                     /* ISUBIU */
-    case 0x10: vi[1] = (v->clip & 0xFFFFFF) == (w & 0xFFFFFF); return 0;               /* FCEQ */
-    case 0x11: v->clip = w & 0xFFFFFF; return 0;                                        /* FCSET */
-    case 0x12: vi[1] = (v->clip & w & 0xFFFFFF) != 0; return 0;                        /* FCAND */
-    case 0x13: vi[1] = ((v->clip | w) & 0xFFFFFF) == 0xFFFFFF; return 0;               /* FCOR */
-    case 0x14: SETVI(it, (v->status & 0xFFF) == imm12); return 0;                       /* FSEQ */
-    case 0x15: v->status = (v->status & 0x3F) | (imm12 & 0xFC0); return 0;              /* FSSET */
-    case 0x16: SETVI(it, v->status & imm12); return 0;                                  /* FSAND */
-    case 0x17: SETVI(it, v->status | imm12); return 0;                                  /* FSOR */
-    case 0x18: SETVI(it, (v->mac & 0xFFFF) == VI(is)); return 0;                        /* FMEQ */
-    case 0x1A: SETVI(it, v->mac & VI(is)); return 0;                                    /* FMAND */
-    case 0x1B: SETVI(it, v->mac | VI(is)); return 0;                                    /* FMOR */
-    case 0x1C: SETVI(it, v->clip & 0xFFF); return 0;                                    /* FCGET */
+    case 0x10: vi[1] = (seen_clip & 0xFFFFFF) == (w & 0xFFFFFF); return 0;               /* FCEQ */
+    case 0x11: v->clip = w & 0xFFFFFF; flags_set_all(v); return 0;                                       /* FCSET */
+    case 0x12: vi[1] = (seen_clip & w & 0xFFFFFF) != 0; return 0;                        /* FCAND */
+    case 0x13: vi[1] = ((seen_clip | w) & 0xFFFFFF) == 0xFFFFFF; return 0;               /* FCOR */
+    case 0x14: SETVI(it, (seen_status & 0xFFF) == imm12); return 0;                       /* FSEQ */
+    case 0x15: v->status = (v->status & 0x3F) | (imm12 & 0xFC0); flags_set_all(v); return 0;              /* FSSET */
+    case 0x16: SETVI(it, seen_status & imm12); return 0;                                  /* FSAND */
+    case 0x17: SETVI(it, seen_status | imm12); return 0;                                  /* FSOR */
+    case 0x18: SETVI(it, (seen_mac & 0xFFFF) == VI(is)); return 0;                        /* FMEQ */
+    case 0x1A: SETVI(it, seen_mac & VI(is)); return 0;                                    /* FMAND */
+    case 0x1B: SETVI(it, seen_mac | VI(is)); return 0;                                    /* FMOR */
+    case 0x1C: SETVI(it, seen_clip & 0xFFF); return 0;                                    /* FCGET */
     case 0x20: BR(1);                                                                   /* B */
     case 0x21: SETVI(it, (pc + 16) / 8); BR(1);                                         /* BAL */
     case 0x24: *target = VI(is) * 8; return 1;                                          /* JR */
@@ -323,20 +348,20 @@ static int lower(Vu *v, u32 w, u32 pc, u32 *target) {
     case 0x68: SETVI(it, vu1_top); return 0;                                            /* XTOP */
     case 0x69: SETVI(it, vu1_itop); return 0;                                           /* XITOP */
     case 0x6C: if (v->id == 1) gif_path1(vu1_mem, VI(is)); return 0;                   /* XGKICK */
-    case 0x70: v->p = a[0] * a[0] + a[1] * a[1] + a[2] * a[2]; return 0;                /* ESADD */
-    case 0x71: v->p = fpu_div(1.0f, a[0] * a[0] + a[1] * a[1] + a[2] * a[2]); return 0; /* ERSADD */
-    case 0x72: v->p = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]); return 0;         /* ELENG */
-    case 0x73: v->p = fpu_div(1.0f, sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2])); return 0;  /* ERLENG */
-    case 0x74: v->p = atan2f(a[1], a[0]); return 0;                                     /* EATANxy */
-    case 0x75: v->p = atan2f(a[2], a[0]); return 0;                                     /* EATANxz */
-    case 0x76: v->p = a[0] + a[1] + a[2] + a[3]; return 0;                              /* ESUM */
-    case 0x78: v->p = sqrtf(fabsf(a[fsf])); return 0;                                   /* ESQRT */
-    case 0x79: v->p = fpu_div(1.0f, sqrtf(fabsf(a[fsf]))); return 0;                    /* ERSQRT */
-    case 0x7A: v->p = fpu_div(1.0f, a[fsf]); return 0;                                  /* ERCPR */
-    case 0x7B: return 0;                                                                /* WAITP */
-    case 0x7C: v->p = sinf(a[fsf]); return 0;                                           /* ESIN */
-    case 0x7D: v->p = atanf(a[fsf]); return 0;                                          /* EATAN */
-    case 0x7E: v->p = expf(-a[fsf]); return 0;                                          /* EEXP */
+    case 0x70: set_p(v, a[0] * a[0] + a[1] * a[1] + a[2] * a[2], 11); return 0;                /* ESADD */
+    case 0x71: set_p(v, fpu_div(1.0f, a[0] * a[0] + a[1] * a[1] + a[2] * a[2]), 18); return 0; /* ERSADD */
+    case 0x72: set_p(v, sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]), 18); return 0;         /* ELENG */
+    case 0x73: set_p(v, fpu_div(1.0f, sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2])), 24); return 0;  /* ERLENG */
+    case 0x74: set_p(v, atan2f(a[1], a[0]), 54); return 0;                                     /* EATANxy */
+    case 0x75: set_p(v, atan2f(a[2], a[0]), 54); return 0;                                     /* EATANxz */
+    case 0x76: set_p(v, a[0] + a[1] + a[2] + a[3], 12); return 0;                              /* ESUM */
+    case 0x78: set_p(v, sqrtf(fabsf(a[fsf])), 12); return 0;                                   /* ESQRT */
+    case 0x79: set_p(v, fpu_div(1.0f, sqrtf(fabsf(a[fsf]))), 18); return 0;                    /* ERSQRT */
+    case 0x7A: set_p(v, fpu_div(1.0f, a[fsf]), 12); return 0;                                  /* ERCPR */
+    case 0x7B: if (v->p_wait) { v->p = v->p_next; v->p_wait = 0; } return 0;                                                               /* WAITP */
+    case 0x7C: set_p(v, sinf(a[fsf]), 29); return 0;                                           /* ESIN */
+    case 0x7D: set_p(v, atanf(a[fsf]), 54); return 0;                                          /* EATAN */
+    case 0x7E: set_p(v, expf(-a[fsf]), 44); return 0;                                          /* EEXP */
     }
     static u8 told[128];
     if (s2 < 128 && !told[s2]++) rt_log("vu", "VU%d: unknown lower instruction %08X", v->id, w);
@@ -360,6 +385,7 @@ static void run(Vu *v) {
         v->pc = (pc + 8) & v->code_mask;
         pairs_run++;
         if (v->q_wait && --v->q_wait == 0) v->q = v->q_next;
+        if (v->p_wait && --v->p_wait == 0) v->p = v->p_next;
 
         UpperOut uo;
         upper(v, hi, &uo);
@@ -368,6 +394,7 @@ static void run(Vu *v) {
         if (hi & 0x80000000u) memcpy(&v->i, &lo, 4);   /* I bit: the lower word is a constant */
         else taken = lower(v, lo, pc, &target);
         commit_upper(v, &uo);
+        flags_advance(v);
 
         if (branch_pending) {
             v->pc = branch_target & v->code_mask;
@@ -378,6 +405,7 @@ static void run(Vu *v) {
         if (hi & 0x40000000u) ending = 1;               /* E: one more pair, then stop */
     }
     if (v->q_wait) { v->q = v->q_next; v->q_wait = 0; }
+    if (v->p_wait) { v->p = v->p_next; v->p_wait = 0; }
 }
 
 void vu_start(int id, int addr, u32 itop) {
