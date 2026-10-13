@@ -72,7 +72,7 @@ def main():
                description="recomp", restat=True)
         n.rule("cc", "gcc -c -O1 -g -w -fno-strict-aliasing -Iport/runtime -Iport/kernel -Iport/iop -Iport/gs -Ibuild/recomp "
                      "-MMD -MF $out.d $in -o $out", depfile="$out.d", deps="gcc", description="cc $in")
-        n.rule("link", "gcc $in -o $out -lm -lpthread -lSDL3", description="link $out")
+        n.rule("link", "gcc -rdynamic $in -o $out -lm -lpthread -lSDL3 -ldl", description="link $out")
         rc_files = [f"build/recomp/rc_{k:03d}.c" for k in range(RC_FILES)] + ["build/recomp/functab.c"]
         n.build(rc_files, "recomp", code, implicit=["tools/recomp/recomp.py", "port/hle.txt"])
         port_srcs = sorted(glob.glob("port/**/*.c", recursive=True))

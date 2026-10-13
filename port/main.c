@@ -17,6 +17,7 @@
 
 int cdvd_open(const char *path);
 int display_window(void);
+void prof_start(void);
 int display_shots(const int *at, int n);
 void display_set_presses(const char *spec);
 
@@ -58,6 +59,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     rt_log("main", "loaded %s, entry %08X", elf, entry);
+    prof_start();
     /* the game runs on host threads of its own; this thread shows the picture */
     pthread_t game;
     pthread_attr_t a;

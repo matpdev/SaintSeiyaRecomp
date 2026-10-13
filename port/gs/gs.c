@@ -18,6 +18,9 @@
 #include "runtime.h"
 #include "gs.h"
 #include "vu.h"
+#include "perf.h"
+
+PerfCounters perf;
 
 typedef struct {
     float x, y;
@@ -360,19 +363,19 @@ static void vertex(u32 x, u32 y, u32 z, int kick) {
     else { gs.vtx[0] = gs.vtx[1]; gs.vtx[1] = gs.vtx[2]; gs.vtx[2] = v; }
     if (kick && gs.vcount >= (type == 6 || type == 1 || type == 2 ? 2 : type == 0 ? 1 : 3)) prim_log(ctx, type);
     switch (type) {
-    case 0: if (kick) { pixel(ctx, (int)v.x, (int)v.y, v.z, vcol(&v)); gs_prims++; } gs.vcount = 0; break;
-    case 1: if (gs.vcount == 2) { if (kick) { draw_line(ctx, &gs.vtx[0], &gs.vtx[1]); gs_prims++; } gs.vcount = 0; } break;
-    case 2: if (gs.vcount == 2) { if (kick) { draw_line(ctx, &gs.vtx[0], &gs.vtx[1]); gs_prims++; } gs.vtx[0] = gs.vtx[1]; gs.vcount = 1; } break;
-    case 3: if (gs.vcount == 3) { if (kick) { draw_triangle(ctx, &gs.vtx[0], &gs.vtx[1], &gs.vtx[2]); gs_prims++; } gs.vcount = 0; } break;
-    case 4: if (gs.vcount == 3 && kick) { draw_triangle(ctx, &gs.vtx[0], &gs.vtx[1], &gs.vtx[2]); gs_prims++; } break;
+    case 0: if (kick) { pixel(ctx, (int)v.x, (int)v.y, v.z, vcol(&v)); gs_prims++; perf.prims++; } gs.vcount = 0; break;
+    case 1: if (gs.vcount == 2) { if (kick) { draw_line(ctx, &gs.vtx[0], &gs.vtx[1]); gs_prims++; perf.prims++; } gs.vcount = 0; } break;
+    case 2: if (gs.vcount == 2) { if (kick) { draw_line(ctx, &gs.vtx[0], &gs.vtx[1]); gs_prims++; perf.prims++; } gs.vtx[0] = gs.vtx[1]; gs.vcount = 1; } break;
+    case 3: if (gs.vcount == 3) { if (kick) { draw_triangle(ctx, &gs.vtx[0], &gs.vtx[1], &gs.vtx[2]); gs_prims++; perf.prims++; } gs.vcount = 0; } break;
+    case 4: if (gs.vcount == 3 && kick) { draw_triangle(ctx, &gs.vtx[0], &gs.vtx[1], &gs.vtx[2]); gs_prims++; perf.prims++; } break;
     case 5:
         if (gs.vcount == 3) {
-            if (kick) { draw_triangle(ctx, &gs.vtx[0], &gs.vtx[1], &gs.vtx[2]); gs_prims++; }
+            if (kick) { draw_triangle(ctx, &gs.vtx[0], &gs.vtx[1], &gs.vtx[2]); gs_prims++; perf.prims++; }
             gs.vtx[1] = gs.vtx[2];
             gs.vcount = 2;
         }
         break;
-    case 6: if (gs.vcount == 2) { if (kick) { draw_sprite(ctx, &gs.vtx[0], &gs.vtx[1]); gs_prims++; } gs.vcount = 0; } break;
+    case 6: if (gs.vcount == 2) { if (kick) { draw_sprite(ctx, &gs.vtx[0], &gs.vtx[1]); gs_prims++; perf.prims++; } gs.vcount = 0; } break;
     default: break;
     }
 }
@@ -580,11 +583,22 @@ void gif_path1(const u8 *vu_mem, u32 addr) {
     memcpy(buf + (0x4000 - a), vu_mem, a);
     paths[0].tag_lo = 0;
     paths[0].loops = 0;
+    u64 t = perf_now();
     gif(&paths[0], buf, 0x400, 1);
+    perf.gs_ns += perf_now() - t;
 }
 
-void gif_path2(const u8 *data, u32 qwc) { gif(&paths[1], data, qwc, 0); }
-void gif_dma(const u8 *data, u32 qwc) { gif(&paths[2], data, qwc, 0); }
+void gif_path2(const u8 *data, u32 qwc) {
+    u64 t = perf_now();
+    gif(&paths[1], data, qwc, 0);
+    perf.gs_ns += perf_now() - t;
+}
+
+void gif_dma(const u8 *data, u32 qwc) {
+    u64 t = perf_now();
+    gif(&paths[2], data, qwc, 0);
+    perf.gs_ns += perf_now() - t;
+}
 
 /* ------------------------------------------------------------------------------- display */
 

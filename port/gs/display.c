@@ -15,6 +15,8 @@
 #include "kernel.h"
 #include "gs.h"
 #include "pad.h"
+#include "perf.h"
+#include <sys/resource.h>
 
 int gs_display(u32 *out, int max_w, int max_h, int *w, int *h);
 void gs_init(void);
@@ -116,12 +118,16 @@ static void save_ppm(const char *path, const u32 *px, int w, int h) {
     fclose(f);
 }
 
+static void panel_update(void);
+
 /* Headless: save the picture at each vertical blank listed (ascending), then exit. */
 int display_shots(const int *at, int n) {
     gs_init();
     for (int k = 0; k < n; k++) {
+        u32 seen = 0;
         while ((int)kernel_vblank_count() < at[k]) {
             pad_buttons[0] = scripted(kernel_vblank_count());
+            if (kernel_vblank_count() != seen) { seen = kernel_vblank_count(); panel_update(); }
             usleep(2000);
         }
         int w, h;
@@ -143,7 +149,58 @@ int display_shots(const int *at, int n) {
     }
     vif_stats();
     vu_stats();
+    void prof_report(void);
+    prof_report();
     return 0;
+}
+
+/* ---- performance panel (F3): refreshed once a second */
+typedef struct { char line[4][96]; } Panel;
+static Panel panel;
+static int panel_on = 1;
+/* (VU1 time includes the XGKICKs it makes, which gs_ns counts too) */
+
+static double cpu_seconds(void) {
+    struct rusage ru;
+    getrusage(RUSAGE_SELF, &ru);
+    return ru.ru_utime.tv_sec + ru.ru_stime.tv_sec + (ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) / 1e6;
+}
+
+/* Called at every vertical blank shown. A game frame is counted when primitives were drawn since
+   the previous vertical blank. */
+static void panel_update(void) {
+    static u64 t0, prims0, gs0, vu0, last_prims;
+    static u32 vb0, frames;
+    static double cpu0;
+    if (perf.prims != last_prims) frames++;
+    last_prims = perf.prims;
+    u64 now = perf_now();
+    if (!t0) { t0 = now; vb0 = kernel_vblank_count(); cpu0 = cpu_seconds(); return; }
+    double dt = (now - t0) / 1e9;
+    if (dt < 1.0) return;
+    double cpu = cpu_seconds();
+    double gs = (perf.gs_ns - gs0) / 1e9, vu = (perf.vu_ns - vu0) / 1e9, total = cpu - cpu0;
+    double game = total - gs - vu;
+    if (game < 0) game = 0;
+    snprintf(panel.line[0], 96, "game %4.1f fps   vblank %4.1f Hz", frames / dt, (kernel_vblank_count() - vb0) / dt);
+    snprintf(panel.line[1], 96, "CPU %3.0f%%  GS %3.0f%%  VU1 %3.0f%%  game %3.0f%%", 100 * total / dt,
+             100 * gs / dt, 100 * vu / dt, 100 * game / dt);
+    snprintf(panel.line[2], 96, "%.0f primitives/s", (perf.prims - prims0) / dt);
+    snprintf(panel.line[3], 96, "F3: hide");
+    if (getenv("SSTHEH_PERF_LOG"))
+        fprintf(stderr, "[perf %5u] %s | %s | %s\n", kernel_vblank_count(), panel.line[0], panel.line[1], panel.line[2]);
+    t0 = now; prims0 = perf.prims; gs0 = perf.gs_ns; vu0 = perf.vu_ns; vb0 = kernel_vblank_count(); cpu0 = cpu;
+    frames = 0;
+}
+
+static void panel_draw(SDL_Renderer *ren) {
+    if (!panel_on || !panel.line[0][0]) return;
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 170);
+    SDL_FRect bg = {4, 4, 8 * 46 + 8, 4 * 10 + 8};
+    SDL_RenderFillRect(ren, &bg);
+    SDL_SetRenderDrawColor(ren, 255, 255, 0, 255);
+    for (int i = 0; i < 4; i++) SDL_RenderDebugText(ren, 8, 8 + i * 10, panel.line[i]);
 }
 
 /* Window: shows the displayed buffer at every vertical blank until it is closed. */
@@ -160,6 +217,7 @@ int display_window(void) {
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) { SDL_Quit(); _exit(0); }
             if (e.type == SDL_EVENT_GAMEPAD_ADDED && !gamepad) gamepad = SDL_OpenGamepad(e.gdevice.which);
+            if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F3) panel_on = !panel_on;
         }
         pad_buttons[0] = keyboard() | gamepad_buttons() | scripted(kernel_vblank_count());
         u32 vb = kernel_vblank_count();
@@ -176,6 +234,8 @@ int display_window(void) {
         SDL_UpdateTexture(tex, NULL, frame, w * 4);
         SDL_RenderClear(ren);
         SDL_RenderTexture(ren, tex, NULL, NULL);
+        panel_update();
+        panel_draw(ren);
         SDL_RenderPresent(ren);
     }
 }

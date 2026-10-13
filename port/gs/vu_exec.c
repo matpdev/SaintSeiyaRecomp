@@ -26,6 +26,7 @@
 #include "runtime.h"
 #include "vu.h"
 #include "gs.h"
+#include "perf.h"
 
 typedef struct {
     VF vf[32];
@@ -390,7 +391,11 @@ void vu_start(int id, int addr, u32 itop) {
     }
     if (id == 1) vu1_itop = itop;
     if (addr >= 0) v->pc = (u32)addr * 8;
+    u64 t = perf_now();
     run(v);
+    u64 dt = perf_now() - t;
+    perf.vu_ns += dt;
+    perf.gs_ns -= 0;   /* (XGKICK time, inside run(), is also in gs_ns) */
 }
 
 void vu_stats(void) {
