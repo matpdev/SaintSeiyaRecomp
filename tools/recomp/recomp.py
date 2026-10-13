@@ -84,8 +84,17 @@ class Gen:
     def find_entries(self):
         """Branch/jump/call targets that land inside another function become extra entry points."""
         import bisect
+        import bisect as _b
         starts = [a for a, _, _ in self.funcs]
         ends = {a: a + sz for a, sz, _ in self.funcs}
+        # code addresses stored in the data (vtables, function pointer tables) that are not function
+        # starts: reachable by jalr, so they become entry points too
+        for p in self.ptrs:
+            if p in self.starts:
+                continue
+            k = bisect.bisect_right(starts, p) - 1
+            if k >= 0 and p < ends[starts[k]]:
+                self.entries[starts[k]].add(p)
         entry = struct.unpack_from("<I", self.raw, 0x18)[0]       # ELF entry point
         if entry not in self.starts:
             import bisect as _b
@@ -318,9 +327,10 @@ class Gen:
 
         if extra:
             out = [f"static void B_{start:08X}(Ctx *c, u32 entry) {{ /* {name} */"]
+            out.append("ENTER(entry);")
             out.append("switch (entry) { " + " ".join(f"case {e:#x}: goto L_{e:08X};" for e in extra) + " }")
         else:
-            out = [f"void F_{start:08X}(Ctx *c) {{ /* {name} */"]
+            out = [f"void F_{start:08X}(Ctx *c) {{ /* {name} */", f"ENTER({start:#x});"]
         i = 0
         while i < n:
             pc = start + 4 * i

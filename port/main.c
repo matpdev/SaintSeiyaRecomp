@@ -20,6 +20,8 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-q")) rt_verbose = 0;
         else if (!strcmp(argv[i], "-v")) rt_verbose = 2;
+        else if (!strcmp(argv[i], "-vv")) rt_verbose = 3;
+        else if (!strcmp(argv[i], "--trace")) rt_trace_on = 1;
         else if (!strcmp(argv[i], "--iso") && i + 1 < argc) iso = argv[++i];
         else elf = argv[i];
     }

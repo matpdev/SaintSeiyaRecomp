@@ -107,8 +107,8 @@ static void rpc_end(const u8 *req, u32 answered, u32 server, u32 buff) {
 }
 
 /* ---- IOP -> EE calls: the IOP binds to an RPC server the EE registered, then calls it.
- * Jobs run one at a time: BIND is sent, the EE answers with RPC_END (server, buff); the data is
- * written into buff, CALL is sent, and the EE's RPC_END for the call finishes the job. */
+ * Jobs run one at a time: BIND is sent (once per server), the EE answers with RPC_END (server,
+ * buff); the data is written into buff and CALL is sent, which finishes the job. */
 typedef struct { u32 sid, fn, size; u8 data[256]; } EeCall;
 #define EE_JOBS 32
 static EeCall ee_jobs[EE_JOBS];
@@ -117,6 +117,7 @@ static struct { u32 sid, server, buff; } ee_servers[16];
 static int ee_nservers;
 
 static void ee_job_next(Ctx *c);
+static void call_sent(Ctx *c);
 
 static void send_bind(u32 sid) {
     u8 r[0x24] = {0};
@@ -154,21 +155,31 @@ void iop_call_ee(u32 sid, u32 fn, const void *data, u32 size) {
 }
 
 static void ee_job_next(Ctx *c) {
+    if (ee_head != ee_tail && rt_verbose > 1)
+        rt_log("iop", "IOP->EE queue: %d waiting, busy %d", (ee_tail - ee_head + EE_JOBS) % EE_JOBS, ee_busy);
     if (ee_busy || ee_head == ee_tail) return;
     EeCall *j = &ee_jobs[ee_head];
     for (int i = 0; i < ee_nservers; i++)
         if (ee_servers[i].sid == j->sid && ee_servers[i].server) {
-            ee_busy = 2;
             send_call(c, ee_servers[i].server, ee_servers[i].buff, j);
+            call_sent(c);
             return;
         }
     ee_busy = 1;
     send_bind(j->sid);
 }
 
+/* The EE's RPC server does not answer a call that asks for no data back, so a call is done once sent. */
+static void call_sent(Ctx *c) {
+    ee_head = (ee_head + 1) % EE_JOBS;
+    ee_busy = 0;
+    ee_job_next(c);
+}
+
 static void ee_rpc_end(Ctx *c, const u8 *p) {
     u32 answered, server, buff;
     memcpy(&answered, p + 0x20, 4);
+    if (rt_verbose > 1) rt_log("iop", "RPC_END from the EE for %08X", answered);
     memcpy(&server, p + 0x24, 4);
     memcpy(&buff, p + 0x28, 4);
     EeCall *j = &ee_jobs[ee_head];
@@ -179,12 +190,8 @@ static void ee_rpc_end(Ctx *c, const u8 *p) {
             return;
         }
         ee_servers[ee_nservers++ % 16] = (typeof(ee_servers[0])){j->sid, server, buff};
-        ee_busy = 2;
         send_call(c, server, buff, j);
-    } else {
-        ee_head = (ee_head + 1) % EE_JOBS;
-        ee_busy = 0;
-        ee_job_next(c);
+        call_sent(c);
     }
 }
 

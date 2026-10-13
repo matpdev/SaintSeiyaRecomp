@@ -70,7 +70,7 @@ def main():
         code = [s for s in sources if not s.startswith("asm/data/")]
         n.rule("recomp", f"{sys.executable} -I tools/recomp/recomp.py {TARGET} build/recomp $in",
                description="recomp", restat=True)
-        n.rule("cc", "gcc -c -O1 -g -w -fno-strict-aliasing -Iport/runtime -Iport/kernel -Iport/iop -Ibuild/recomp "
+        n.rule("cc", "gcc -c -O1 -g -w -fno-strict-aliasing -Iport/runtime -Iport/kernel -Iport/iop -Iport/gs -Ibuild/recomp "
                      "-MMD -MF $out.d $in -o $out", depfile="$out.d", deps="gcc", description="cc $in")
         n.rule("link", "gcc $in -o $out -lm -lpthread", description="link $out")
         rc_files = [f"build/recomp/rc_{k:03d}.c" for k in range(RC_FILES)] + ["build/recomp/functab.c"]

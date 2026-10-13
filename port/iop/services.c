@@ -78,6 +78,7 @@ GENERIC(srv_libsd, "libsd")
 GENERIC(srv_dbc, "dbc")            /* DBCMAN: device bus (pads, memory cards over SIO2) */
 GENERIC(srv_mc2, "mc2")
 u32 srv_rssd(Ctx *c, u32 fn, u8 *in, u32 in_size, u8 *out, u32 out_size);   /* rssd.c */
+u32 srv_cri_adxi(Ctx *c, u32 fn, u8 *in, u32 in_size, u8 *out, u32 out_size);   /* cri_adxi.c */
 
 void iop_services_init(void) {
     iop_register_server(0x80000001, "fileio", srv_fileio);
@@ -94,5 +95,6 @@ void iop_services_init(void) {
     iop_register_server(0x80000701, "libsd", srv_libsd);
     iop_register_server(0x00000900, "rssd", srv_rssd);
     iop_register_server(0x80001300, "dbc", srv_dbc);
+    iop_register_server(0x90000200, "cri-adxi", srv_cri_adxi);
     iop_register_server(0x80001400, "mc2", srv_mc2);
 }

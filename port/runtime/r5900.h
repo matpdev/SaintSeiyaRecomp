@@ -306,6 +306,10 @@ extern volatile int rt_irq_pending;  /* set by the interrupt timer */
 void rt_poll(Ctx *c);                 /* run pending interrupts; polled at backward branches */
 #define POLL() do { if (__builtin_expect(rt_irq_pending, 0)) rt_poll(c); } while (0)
 
+extern int rt_trace_on;               /* --trace: log every function the first time it runs */
+void rt_enter(Ctx *c, u32 addr);
+#define ENTER(a) do { if (__builtin_expect(rt_trace_on, 0)) rt_enter(c, a); } while (0)
+
 void rt_call(Ctx *c, u32 addr);       /* call guest code at addr (jalr, unknown jal) */
 void rt_jump(Ctx *c, u32 addr);       /* jr / branch to a computed or unknown address: call, caller returns */
 void rt_syscall(Ctx *c, u32 pc);

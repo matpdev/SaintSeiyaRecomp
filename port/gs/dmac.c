@@ -1,0 +1,121 @@
+/*
+ * The EE's DMA controller (DMAC), the part the game uses to feed the graphics hardware.
+ *
+ * A transfer starts when the game writes CHCR with STR (bit 8) set. It is carried out at once:
+ * the data is walked (normal mode: QWC quadwords at MADR; chain mode: DMA tags from TADR) and
+ * handed to the channel's destination, then STR is cleared, the channel's bit in D_STAT is set
+ * and, if enabled in D_STAT's mask, the DMAC interrupt for the channel is raised.
+ *
+ * Channel registers (base + offset): CHCR 0x00, MADR 0x10, QWC 0x20, TADR 0x30, ASR0 0x40,
+ * ASR1 0x50, SADR 0x80. CHCR: DIR 0, MOD 2-3 (0 normal, 1 chain, 2 interleave), ASP 4-5, TTE 6,
+ * TIE 7, STR 8, TAG 16-31.
+ * Source-chain tag (one quadword): QWC 0-15, PCE 26-27, ID 28-30, IRQ 31, ADDR 32-62 (bit 63: SPR).
+ * IDs: 0 refe, 1 cnt, 2 next, 3 ref, 4 refs, 5 call, 6 ret, 7 end.
+ */
+#include <stdio.h>
+#include <string.h>
+
+#include "r5900.h"
+#include "runtime.h"
+#include "kernel.h"
+#include "gs.h"
+
+static const u32 base[10] = {0x10008000, 0x10009000, 0x1000A000, 0x1000B000, 0x1000B400,
+                             0x1000C000, 0x1000C400, 0x1000C800, 0x1000D000, 0x1000D400};
+static const char *const names[10] = {"VIF0", "VIF1", "GIF", "fromIPU", "toIPU", "SIF0", "SIF1", "SIF2",
+                                      "fromSPR", "toSPR"};
+static u32 d_stat;              /* 0-9 channel done, 16-25 interrupt mask */
+static u32 reg[10][0x100 / 4];  /* each channel's registers, by offset / 4 */
+
+int dmac_channel_of(u32 a) {
+    for (int i = 0; i < 10; i++)
+        if (a >= base[i] && a < base[i] + 0x100) return i;
+    return -1;
+}
+
+/* Host pointer to `qwc` quadwords of guest memory (RAM or scratchpad), or NULL. */
+static const u8 *mem(u32 addr, int spr) {
+    if (spr || (addr & 0x80000000u)) return rt_spr + (addr & 0x3FF0);
+    return rt_ptr(addr & 0x01FFFFF0);
+}
+
+static void deliver(Ctx *c, int ch, const u8 *data, u32 qwc) {
+    (void)c;
+    if (!data || !qwc) return;
+    if (ch == 2) gif_dma(data, qwc);
+    else if (ch == 1) vif1_dma(data, qwc);
+    else if (ch == 0) vif0_dma(data, qwc);
+}
+
+static void run_chain(Ctx *c, int ch) {
+    u32 *r = reg[ch];
+    u32 tadr = r[0x30 / 4], asr[2] = {r[0x40 / 4], r[0x50 / 4]};
+    int asp = (r[0] >> 4) & 3, tte = (r[0] >> 6) & 1;
+    for (int guard = 0; guard < 100000; guard++) {
+        const u8 *t = mem(tadr, 0);
+        if (!t) { rt_log("dmac", "%s: tag address %08X unmapped", names[ch], tadr); break; }
+        u64 tag;
+        memcpy(&tag, t, 8);
+        u32 qwc = tag & 0xFFFF, id = (tag >> 28) & 7, addr = (u32)(tag >> 32) & 0x7FFFFFF0, spr = tag >> 63;
+        int irq = (tag >> 31) & 1;
+        if (tte && (ch == 0 || ch == 1)) vif_tag(ch, t + 8);   /* the tag's upper half: two VIF codes */
+        r[0] = (r[0] & 0xFFFF) | (u32)(tag & 0xFFFF0000);       /* CHCR.TAG = upper 16 bits of the tag */
+        u32 next = tadr + 16;
+        switch (id) {
+        case 0: deliver(c, ch, mem(addr, spr), qwc); next = 0; break;                     /* refe */
+        case 1: deliver(c, ch, t + 16, qwc); next = tadr + 16 + qwc * 16; break;          /* cnt */
+        case 2: deliver(c, ch, t + 16, qwc); next = addr; break;                          /* next */
+        case 3: case 4: deliver(c, ch, mem(addr, spr), qwc); next = tadr + 16; break;     /* ref, refs */
+        case 5:                                                                           /* call */
+            deliver(c, ch, t + 16, qwc);
+            if (asp < 2) asr[asp++] = tadr + 16 + qwc * 16;
+            next = addr;
+            break;
+        case 6:                                                                           /* ret */
+            deliver(c, ch, t + 16, qwc);
+            if (asp > 0) next = asr[--asp];
+            else next = 0;
+            break;
+        case 7: deliver(c, ch, t + 16, qwc); next = 0; break;                             /* end */
+        }
+        if (next == 0 || (irq && (r[0] & 0x80))) break;
+        tadr = next;
+    }
+    r[0x30 / 4] = tadr;
+    r[0x20 / 4] = 0;
+}
+
+static void start(Ctx *c, int ch) {
+    u32 *r = reg[ch];
+    int mod = (r[0] >> 2) & 3;
+    if (ch == 5 || ch == 6 || ch == 7) {            /* SIF: handled by the SIF syscalls */
+        r[0] &= ~0x100u;
+        return;
+    }
+    if (mod == 1) run_chain(c, ch);
+    else deliver(c, ch, mem(r[0x10 / 4], r[0x10 / 4] >> 31), r[0x20 / 4]);
+    r[0x20 / 4] = 0;
+    r[0] &= ~0x100u;
+    d_stat |= 1u << ch;
+    kernel_raise_dmac(ch);                          /* the kernel runs the handlers enabled for it */
+}
+
+u32 dmac_read(u32 a) {
+    if (a == 0x1000E010) return d_stat;
+    int ch = dmac_channel_of(a);
+    if (ch >= 0) return reg[ch][(a - base[ch]) / 4];
+    return 0;
+}
+
+int dmac_write(Ctx *c, u32 a, u32 v) {
+    if (a == 0x1000E010) {                          /* D_STAT: write 1 clears a status bit, toggles a mask bit */
+        d_stat &= ~(v & 0x3FF);
+        d_stat ^= v & 0x3FF0000;
+        return 1;
+    }
+    int ch = dmac_channel_of(a);
+    if (ch < 0) return 0;
+    reg[ch][(a - base[ch]) / 4] = v;
+    if (a == base[ch] && (v & 0x100)) start(c, ch);
+    return 1;
+}

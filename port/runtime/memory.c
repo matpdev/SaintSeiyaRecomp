@@ -10,6 +10,7 @@
 
 #include "r5900.h"
 #include "runtime.h"
+#include "gs.h"
 
 u8 *rt_ram;
 u8 rt_spr[0x4000] __attribute__((aligned(16)));
@@ -36,6 +37,9 @@ u32 rt_mmio_read(Ctx *c, u32 a, int size) {
     u8 *p = io_slot(a, &seen);
     if (!p) rt_fatal(c, "read%d from unmapped address %08X", size * 8, a);
     u32 p_ = a & 0x1FFFFFFF;
+    if (p_ >= 0x10008000 && p_ < 0x1000F000) return dmac_read(p_);
+    /* VIF0/VIF1/GIF status: transfers complete at once, so the paths are always idle */
+    if (p_ == 0x10003800 || p_ == 0x10003C00 || p_ == 0x10003020) return 0;
     /* registers whose reads must not just echo the last write */
     if (p_ == 0x12001000) {               /* GS CSR: report VSync/FINISH events as happened */
         return 0x0000000C | (kernel_vblank_count() & 1 ? 0x2000 : 0);
@@ -50,6 +54,8 @@ void rt_mmio_write(Ctx *c, u32 a, int size, u64 value) {
     u8 *seen;
     u8 *p = io_slot(a, &seen);
     if (!p) rt_fatal(c, "write%d to unmapped address %08X", size * 8, a);
+    u32 p_ = a & 0x1FFFFFFF;
+    if (p_ >= 0x10008000 && p_ < 0x1000F000 && size <= 4 && dmac_write(c, p_, (u32)value)) return;
     if (!(*seen & 2)) { *seen |= 2; rt_log("mmio", "write%d %08X = %llX", size * 8, a, (unsigned long long)value); }
     memcpy(p, &value, size);
 }

@@ -73,3 +73,16 @@ void rt_mtc0(Ctx *c, int reg, u32 v) {
 
 void rt_ei(Ctx *c) { (void)c; cop0_status |= 0x10000; }
 void rt_di(Ctx *c) { (void)c; cop0_status &= ~0x10000u; }
+
+/* --trace: the first call of every function is logged with the thread making it, so the log shows
+ * how far execution has got. */
+int rt_trace_on;
+static u8 called[(0x00500000 - 0x00100000) / 4 / 8];
+
+void rt_enter(Ctx *c, u32 addr) {
+    u32 i = (addr - 0x00100000) / 4;
+    if (i >= sizeof called * 8 || called[i / 8] & (1 << (i % 8))) return;
+    called[i / 8] |= 1 << (i % 8);
+    const FuncEntry *f = rt_find(addr);
+    fprintf(stderr, "[trace ] t%d %08X %s\n", c->thread, addr, f ? f->name : "?");
+}

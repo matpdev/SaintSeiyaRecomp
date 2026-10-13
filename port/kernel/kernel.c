@@ -24,6 +24,7 @@
 #include "runtime.h"
 #include "kernel.h"
 #include "iop.h"
+#include "gs.h"
 
 #define MAX_THREADS 256
 #define MAX_SEMAS 256
@@ -187,9 +188,19 @@ static void run_handlers(Handler *list, int cause) {
     for (int i = 0; i < MAX_HANDLERS; i++) {
         Handler *h = &list[i];
         if (!h->used || h->cause != cause || !h->enabled) continue;
+        static u8 told[2][16];
+        if (cause < 16 && !told[list == dmac][cause]++)
+            rt_log("kernel", "first %s interrupt %d -> %08X", list == dmac ? "DMAC" : "INTC", cause, h->handler);
         irq_ctx.r[28].d[0] = cur >= 0 ? threads[cur].ctx.r[28].d[0] : 0;
         call_guest(&irq_ctx, h->handler, cause, h->arg, 0);
     }
+}
+
+static volatile u32 dmac_pending;
+
+void kernel_raise_dmac(int ch) {
+    dmac_pending |= 1u << ch;
+    rt_irq_pending = 1;
 }
 
 static void raise_sif0(Ctx *c) {
@@ -201,11 +212,16 @@ static void raise_sif0(Ctx *c) {
 static void run_interrupts(void) {
     if (in_irq) return;
     rt_irq_pending = 0;
-    if (!timer_vblank && !iop_pending()) return;
+    if (!timer_vblank && !iop_pending() && !dmac_pending) return;
     in_irq = 1;
     /* irq_ctx gets its own stack at the top of RAM, below the main thread's area */
     irq_ctx.r[29].d[0] = RAM_END - 0x100000;
     if (iop_pending()) iop_deliver(&irq_ctx, raise_sif0);
+    while (dmac_pending) {
+        int ch = __builtin_ctz(dmac_pending);
+        dmac_pending &= ~(1u << ch);
+        if (ch != 5 && (dmac_mask & (1u << ch))) run_handlers(dmac, ch);
+    }
     if (!timer_vblank) { in_irq = 0; return; }
     timer_vblank = 0;
     vblanks++;
@@ -368,6 +384,8 @@ void rt_syscall(Ctx *c, u32 pc) {
     }
 
     pthread_mutex_lock(&big);
+    if (rt_verbose > 2)
+        rt_log("sys", "thread %d: %s0x%X(%X, %X, %X) from %s", cur, isr ? "-" : "", k, a0, a1, a2, rt_name_of(pc));
     switch (k) {
     case 0x02: rt_log("kernel", "SetGsCrt(interlace=%u, mode=%u, field=%u)", a0, a1, a2); gs_set_crt(a0, a1, a2); break;
     case 0x04: rt_log("kernel", "Exit(%d)", a0); fflush(stderr); _exit(a0);
