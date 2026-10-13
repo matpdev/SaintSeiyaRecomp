@@ -25,6 +25,10 @@ u32 srv_rssd(Ctx *c, u32 fn, u8 *in, u32 in_size, u8 *out, u32 out_size) {
     if (out_size >= 8) {
         u16 cmd = (u16)fn;
         u32 result = next_result++;
+        /* 0x55: is this sound (looping effects) still playing? 1 = yes. Anything else makes the
+         * game start it again through a path that indexes its slot table with the whole handle
+         * (slot << 16 | id) and reads far outside memory (0x00351220 -> 0x001B5CF0) */
+        if (fn == 0x55) result = 1;
         memset(out, 0, out_size < 32 ? out_size : 32);
         memcpy(out, &cmd, 2);
         memcpy(out + 4, &result, 4);
