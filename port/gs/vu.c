@@ -23,8 +23,12 @@ u8 vu0_mem[0x1000] __attribute__((aligned(16))), vu0_code[0x1000] __attribute__(
 void vu_load_program(int vu, u32 addr, const u32 *words, u32 count) {
     u8 *code = vu ? vu1_code : vu0_code;
     u32 size = vu ? sizeof vu1_code : sizeof vu0_code;
-    for (u32 i = 0; i < count; i++) memcpy(code + ((addr + i * 4) & (size - 1)), &words[i], 4);   /* addr in bytes */
-    vu_code_written(vu, addr & (size - 1), count * 4);
+    int changed = 0;
+    for (u32 i = 0; i < count; i++) {                    /* addr in bytes */
+        u8 *dst = code + ((addr + i * 4) & (size - 1));
+        if (memcmp(dst, &words[i], 4)) { memcpy(dst, &words[i], 4); changed = 1; }
+    }
+    if (changed) vu_code_written(vu, addr & (size - 1), count * 4);   /* the same code again is common */
 }
 
 void vu_unpack(int vu, const VuUnpack *u, const u32 *data) {
