@@ -31,8 +31,24 @@ do hardware do PS2. A decomp matching continua em paralelo, e cada função deco
 
 - Marco 0 (preparação): concluído. O build é idêntico ao original e há 327 funções de biblioteca nomeadas.
 - Marco 1: concluído. As 13.855 funções são traduzidas para C (`tools/recomp/recomp.py`) e compilam.
-- Marco 2: em andamento. `build/sstheh` roda crt0, a inicialização do SDK (patches de kernel, Timer 2,
-  thread ociosa) e `main` do jogo, que imprime `::main: Incoming.` e inicializa o alocador de memória
-  (`CMemoryAllocator::Init`). Para no primeiro contato com o IOP (SIF), que é o próximo trabalho.
+- Marco 2: quase concluído. `build/sstheh` roda crt0, a inicialização do SDK e `main`. O jogo:
+  - imprime `::main: Incoming.`, inicializa o alocador (`CMemoryAllocator::Init`);
+  - inicializa o SIF/RPC com o IOP HLE (`port/iop/`), reinicia o IOP (IOPRP280) e reconecta;
+  - inicializa o CD/DVD ("Disk Type = PlayStation2 DVD"): libcdvd substituída por leitura do ISO;
+  - carrega os módulos do IOP (simulados), inicializa o som RSSD (handshake 0xF0 via RPC IOP -> EE);
+  - inicializa o DMAC e manda os primeiros pacotes ao VIF0/VIF1/GIF; cria 11 threads.
+  Para na inicialização do PS2RNA da CRI (`0x264710`), que espera o módulo `CRI_ADXI.IRX` do IOP.
+
+## Próximos passos
+
+1. **CRI ADXI** (servidor `0x90000200`): simular o lado IOP do ADX o suficiente para o PS2RNA iniciar;
+   depois, áudio de verdade (o `snd_adx.c` do Tenkaichi3Decomp decodifica ADX).
+2. **DMAC + GIF/VIF + GS**: trazer o renderer do Tenkaichi3Decomp (`port/src/gs`, MIT) e ligar às escritas
+   nos registradores de DMA; interpretador de VU1 para os 62 programas.
+3. **DBC / controle** (`0x80001300`, `0x8000131B/C`): devolver o estado do controle a partir do SDL.
+4. **RSSD** (som do jogo, `0x900`/`0x901`): reimplementar o protocolo.
+
+Ferramentas: `tools/recon/xref.py` (quem usa uma string, quem chama uma função), `port/hle.txt` (substituir
+funções do jogo por nativas), `./build/sstheh -v` (log detalhado).
 
 Rodar: `.venv/bin/python configure.py && ninja port && ./build/sstheh`

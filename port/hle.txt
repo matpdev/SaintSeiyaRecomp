@@ -1,3 +1,14 @@
 # Guest functions replaced by native ones (port/hle/*.c). The recompiler emits a call to the native
 # function instead of translating the guest code. Format: address native_function  # what it is
 0x00110C28 hle_tty_write        # SDK: write text to the Deci2 TTY (debug console), (buf, len) -> len
+# libcdvd (SDK 2.8), identified by their messages and RPC numbers: see port/hle/cdvd.c
+0x00123250 hle_sceCdInit
+0x00123930 hle_sceCdRead
+0x00122F20 hle_sceCdSync
+0x001229E0 hle_sceCdSearchFile
+0x00123530 hle_sceCdDiskReady
+0x00123728 hle_sceCdDiskReady    # second variant (server 0x8000059C), answers the same
+0x00123BE0 hle_sceCdGetDiskType
+0x00123C78 hle_sceCdGetError
+0x00123D10 hle_sceCdBreak
+0x00123DC8 hle_sceCdMmode

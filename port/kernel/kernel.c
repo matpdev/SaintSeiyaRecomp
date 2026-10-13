@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 /*
  * The PS2 EE kernel, reimplemented (HLE): threads, semaphores, interrupt and DMA handlers, alarms,
  * and the bookkeeping syscalls the SDK makes at start-up.
@@ -22,6 +23,7 @@
 #include "r5900.h"
 #include "runtime.h"
 #include "kernel.h"
+#include "iop.h"
 
 #define MAX_THREADS 256
 #define MAX_SEMAS 256
@@ -48,7 +50,8 @@ typedef struct { int used, count, max, init, waiters; u32 attr, option; } Sema;
 typedef struct { int used, cause, enabled; u32 handler, arg, next; } Handler;
 typedef struct { int used; u64 when; u32 handler, arg; } Alarm;
 
-static pthread_mutex_t big = PTHREAD_MUTEX_INITIALIZER;
+/* recursive: interrupt handlers run with the lock held and make (i-prefixed) syscalls */
+static pthread_mutex_t big = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
 static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
 static Thread threads[MAX_THREADS];
 static Sema semas[MAX_SEMAS];
@@ -134,12 +137,29 @@ static void switch_away(int me) {
         }
         /* nobody can run: wait for the next interrupt and run it here */
         pthread_mutex_unlock(&big);
-        while (!rt_irq_pending) usleep(200);
+        while (!rt_irq_pending && !iop_pending()) usleep(200);
         pthread_mutex_lock(&big);
         run_interrupts();
     }
     pthread_cond_broadcast(&cv);
     while (cur != me) pthread_cond_wait(&cv, &big);
+}
+
+/* The running thread is gone (exited): hand the CPU on, idling until some thread is ready. */
+static void leave_cpu(void) {
+    for (;;) {
+        int next = best_ready();
+        if (next >= 0) { cur = next; break; }
+        int any = 0;
+        for (int i = 1; i < MAX_THREADS; i++) any |= threads[i].state == T_WAIT || threads[i].state == T_SUSPEND;
+        if (!any) rt_fatal(NULL, "every thread has ended");
+        cur = -1;
+        pthread_mutex_unlock(&big);
+        while (!rt_irq_pending && !iop_pending()) usleep(200);
+        pthread_mutex_lock(&big);
+        run_interrupts();
+    }
+    pthread_cond_broadcast(&cv);
 }
 
 /* After something became ready: switch if it outranks the running thread. */
@@ -172,14 +192,22 @@ static void run_handlers(Handler *list, int cause) {
     }
 }
 
+static void raise_sif0(Ctx *c) {
+    (void)c;
+    if (!(dmac_mask & (1 << 5))) rt_log("kernel", "SIF0 interrupt while DMAC channel 5 is disabled");
+    run_handlers(dmac, 5);
+}
+
 static void run_interrupts(void) {
     if (in_irq) return;
     rt_irq_pending = 0;
-    if (!timer_vblank) return;
-    timer_vblank = 0;
+    if (!timer_vblank && !iop_pending()) return;
     in_irq = 1;
     /* irq_ctx gets its own stack at the top of RAM, below the main thread's area */
     irq_ctx.r[29].d[0] = RAM_END - 0x100000;
+    if (iop_pending()) iop_deliver(&irq_ctx, raise_sif0);
+    if (!timer_vblank) { in_irq = 0; return; }
+    timer_vblank = 0;
     vblanks++;
     hsyncs += 312;
     if (intc_mask & (1 << 2)) run_handlers(intc, 2);       /* VBLANK_START */
@@ -241,10 +269,7 @@ static void *thread_main(void *arg) {
     rt_log("kernel", "thread %d returned", id);
     t->state = T_DORMANT;
     t->host_started = 0;
-    int next = best_ready();
-    cur = next;
-    if (next < 0) rt_fatal(NULL, "every thread has ended");
-    pthread_cond_broadcast(&cv);
+    leave_cpu();
     pthread_mutex_unlock(&big);
     return NULL;
 }
@@ -386,10 +411,7 @@ void rt_syscall(Ctx *c, u32 pc) {
         rt_log("kernel", "thread %d exits", cur);
         t->state = k == 0x24 ? T_FREE : T_DORMANT;
         t->host_started = 0;
-        int next = best_ready();
-        if (next < 0) rt_fatal(c, "every thread has ended");
-        cur = next;
-        pthread_cond_broadcast(&cv);
+        leave_cpu();
         pthread_mutex_unlock(&big);
         pthread_exit(NULL);
     }
@@ -536,6 +558,7 @@ void rt_syscall(Ctx *c, u32 pc) {
         ret = 0;
     }
     run_interrupts();
+    maybe_preempt();
     pthread_mutex_unlock(&big);
     SET64(2, ret);
 }
@@ -545,6 +568,7 @@ void rt_syscall(Ctx *c, u32 pc) {
 u32 gs_imr = 0xFF00;
 
 void kernel_init(void) {
+    iop_init();
     pthread_t timer;
     pthread_create(&timer, NULL, timer_main, NULL);
 }
