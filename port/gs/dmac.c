@@ -85,9 +85,70 @@ static void run_chain(Ctx *c, int ch) {
     r[0x20 / 4] = 0;
 }
 
+/* Scratchpad <-> RAM: fromSPR (8) copies QWC quadwords from SPR at SADR to MADR; toSPR (9) copies
+ * from MADR (or a source chain) into SPR at SADR. A destination chain on fromSPR reads its tags
+ * from the scratchpad data: ID 0 cnts (data follows, to MADR), 1 cnt, 7 end; ADDR = the RAM address. */
+static void spr_copy(int to_spr, u32 ram, u32 spr, u32 qwc) {
+    for (u32 i = 0; i < qwc; i++) {
+        u8 *m = rt_ptr((ram + i * 16) & 0x01FFFFF0);
+        u8 *s = rt_spr + ((spr + i * 16) & 0x3FF0);
+        if (!m) continue;
+        if (to_spr) memcpy(s, m, 16);
+        else memcpy(m, s, 16);
+    }
+}
+
+static void spr_transfer(Ctx *c, int ch) {
+    (void)c;
+    u32 *r = reg[ch];
+    int mod = (r[0] >> 2) & 3;
+    u32 sadr = r[0x80 / 4] & 0x3FF0;
+    if (ch == 9 && mod == 1) {                      /* toSPR, source chain */
+        u32 tadr = r[0x30 / 4];
+        for (int guard = 0; guard < 100000; guard++) {
+            const u8 *t = mem(tadr, 0);
+            if (!t) break;
+            u64 tag;
+            memcpy(&tag, t, 8);
+            u32 qwc = tag & 0xFFFF, id = (tag >> 28) & 7, addr = (u32)(tag >> 32) & 0x7FFFFFF0;
+            u32 src = (id == 0 || id == 3 || id == 4) ? addr : tadr + 16, next = 0;
+            spr_copy(1, src, sadr, qwc);
+            sadr += qwc * 16;
+            if (id == 1) next = tadr + 16 + qwc * 16;
+            else if (id == 2) next = addr;
+            else if (id == 3 || id == 4) next = tadr + 16;
+            if (!next || id == 0 || id == 7) break;
+            tadr = next;
+        }
+    } else if (ch == 8 && mod == 1) {               /* fromSPR, destination chain */
+        for (int guard = 0; guard < 100000; guard++) {
+            u64 tag;
+            memcpy(&tag, rt_spr + sadr, 8);
+            sadr = (sadr + 16) & 0x3FF0;
+            u32 qwc = tag & 0xFFFF, id = (tag >> 28) & 7, addr = (u32)(tag >> 32) & 0x7FFFFFF0;
+            spr_copy(0, addr, sadr, qwc);
+            sadr = (sadr + qwc * 16) & 0x3FF0;
+            if (id == 7) break;
+        }
+    } else {
+        spr_copy(ch == 9, r[0x10 / 4], sadr, r[0x20 / 4]);
+        r[0x10 / 4] += r[0x20 / 4] * 16;
+        sadr += r[0x20 / 4] * 16;
+    }
+    r[0x80 / 4] = sadr;
+}
+
 static void start(Ctx *c, int ch) {
     u32 *r = reg[ch];
     int mod = (r[0] >> 2) & 3;
+    if (ch == 8 || ch == 9) {
+        spr_transfer(c, ch);
+        r[0x20 / 4] = 0;
+        r[0] &= ~0x100u;
+        d_stat |= 1u << ch;
+        kernel_raise_dmac(ch);
+        return;
+    }
     if (ch == 5 || ch == 6 || ch == 7) {            /* SIF: handled by the SIF syscalls */
         r[0] &= ~0x100u;
         return;

@@ -84,5 +84,5 @@ void rt_enter(Ctx *c, u32 addr) {
     if (i >= sizeof called * 8 || called[i / 8] & (1 << (i % 8))) return;
     called[i / 8] |= 1 << (i % 8);
     const FuncEntry *f = rt_find(addr);
-    fprintf(stderr, "[trace ] t%d %08X %s\n", c->thread, addr, f ? f->name : "?");
+    fprintf(stderr, "[trace %5u] t%d %08X %s\n", kernel_vblank_count(), c->thread, addr, f ? f->name : "?");
 }

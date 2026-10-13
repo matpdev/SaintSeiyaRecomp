@@ -131,6 +131,8 @@ class Gen:
     # one non-control instruction ---------------------------------------------------------------
     def simple(self, ins, pc):
         op = ins.getOpcodeName()
+        if op.split(".")[0] in ("qmtc2", "qmfc2", "cfc2", "ctc2"):
+            op = op.split(".")[0]      # .ni / .i: interlock with VU0 micro mode, not modelled
         raw = ins.getRaw()
         rs, rt, rd, sa = (raw >> 21) & 31, (raw >> 16) & 31, (raw >> 11) & 31, (raw >> 6) & 31
         fs, ft, fd = rd, rt, sa

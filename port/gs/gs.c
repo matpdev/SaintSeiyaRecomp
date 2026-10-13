@@ -323,6 +323,25 @@ static void draw_line(int ctx, const Vertex *a, const Vertex *b) {
 }
 
 u64 gs_prims;
+u32 kernel_vblank_count(void);
+
+/* SSTHEH_PRIMS=<vblank>: list the first 40 primitives drawn from that vertical blank on (tests) */
+static void prim_log(int ctx, int type) {
+    static int want = -2;
+    if (want == -2) want = getenv("SSTHEH_PRIMS") ? atoi(getenv("SSTHEH_PRIMS")) : -1;
+    static int shown;
+    if (want < 0 || (int)kernel_vblank_count() < want || shown >= 40) return;
+    shown++;
+    const Vertex *a = &gs.vtx[0], *b = &gs.vtx[gs.vcount ? gs.vcount - 1 : 0];
+    u64 t0 = gs.tex0[ctx], fr = gs.frame[ctx];
+    fprintf(stderr, "  [%u] prim %d ctx %d (%.1f,%.1f)-(%.1f,%.1f) z %08X rgba %02X%02X%02X%02X tme %d abe %d tex %04X psm %02X "
+                    "%dx%d | fbp %03X fbw %u fpsm %02X fbmsk %08X | scissor %llX alpha %llX test %llX\n",
+            kernel_vblank_count(), type, ctx, a->x, a->y, b->x, b->y, b->z, b->r, b->g, b->b, b->a, (int)((gs.prim >> 4) & 1),
+            (int)((gs.prim >> 6) & 1), (unsigned)(t0 & 0x3FFF), (unsigned)((t0 >> 20) & 0x3F), 1 << ((t0 >> 26) & 15),
+            1 << ((t0 >> 30) & 15), (unsigned)(fr & 0x1FF), (unsigned)((fr >> 16) & 0x3F), (unsigned)((fr >> 24) & 0x3F),
+            (unsigned)(fr >> 32), (unsigned long long)gs.scissor[ctx], (unsigned long long)gs.alpha[ctx],
+            (unsigned long long)gs.test[ctx]);
+}
 
 static void vertex(u32 x, u32 y, u32 z, int kick) {
     int ctx = (gs.prim >> 9) & 1, type = gs.prim & 7;
@@ -339,6 +358,7 @@ static void vertex(u32 x, u32 y, u32 z, int kick) {
     v.v = (gs.uv >> 16) & 0x3FFF;
     if (gs.vcount < 3) gs.vtx[gs.vcount++] = v;
     else { gs.vtx[0] = gs.vtx[1]; gs.vtx[1] = gs.vtx[2]; gs.vtx[2] = v; }
+    if (kick && gs.vcount >= (type == 6 || type == 1 || type == 2 ? 2 : type == 0 ? 1 : 3)) prim_log(ctx, type);
     switch (type) {
     case 0: if (kick) { pixel(ctx, (int)v.x, (int)v.y, v.z, vcol(&v)); gs_prims++; } gs.vcount = 0; break;
     case 1: if (gs.vcount == 2) { if (kick) { draw_line(ctx, &gs.vtx[0], &gs.vtx[1]); gs_prims++; } gs.vcount = 0; } break;
@@ -461,6 +481,27 @@ static u32 gif(GifState *st, const u8 *p, u32 qwc, int stop_at_eop) {
             gif_tags++;
             st->loops = st->tag_lo & 0x7FFF;
             st->reg = 0;
+            {
+                static int want = -2, shown;
+                if (want == -2) want = getenv("SSTHEH_PRIMS") ? atoi(getenv("SSTHEH_PRIMS")) : -1;
+                if (want >= 0 && (int)kernel_vblank_count() >= want && shown < 12 && ((st->tag_lo >> 47) & 7) == 4) {
+                    shown++;
+                    long ee = (const u8 *)q - rt_ram;
+                    fprintf(stderr, "  GIF at EE %08lX path%d tag %016llX %016llX nloop %u flg %u nreg %u\n",
+                            ee >= 0 && ee < 0x2000000 ? ee : -1L, (int)(st - paths) + 1,
+                            (unsigned long long)st->tag_lo, (unsigned long long)st->tag_hi, st->loops,
+                            (unsigned)((st->tag_lo >> 58) & 3), (unsigned)((st->tag_lo >> 60) & 15));
+                    if (shown == 1) {
+                        u64 sig[2] = {0x3400000000008004ull, 0x512};
+                        for (u32 o = 0; o + 16 <= 0x2000000; o += 16)
+                            if (!memcmp(rt_ram + o, sig, 16)) fprintf(stderr, "     tag found in RAM at %08X\n", o);
+                        for (u32 o = 0; o + 16 <= 0x4000; o += 16)
+                            if (!memcmp(rt_spr + o, sig, 16)) fprintf(stderr, "     tag found in scratchpad at %08X\n", 0x70000000 + o);
+                    }
+                    for (int k = 0; k < 6 && k < (int)(qwc - used); k++)
+                        fprintf(stderr, "     %016llX %016llX\n", (unsigned long long)q[k * 2], (unsigned long long)q[k * 2 + 1]);
+                }
+            }
             if (((st->tag_lo >> 46) & 1)) reg_write(0, (st->tag_lo >> 47) & 0x7FF);
             if (st->loops == 0 && stop_at_eop && ((st->tag_lo >> 15) & 1)) { st->tag_lo = 0; return used; }
             continue;
@@ -510,10 +551,23 @@ static u32 gif(GifState *st, const u8 *p, u32 qwc, int stop_at_eop) {
     return used;
 }
 
+u32 kernel_vblank_count(void);
+
 void gif_path1(const u8 *vu_mem, u32 addr) {
     static u8 buf[0x4000 * 2];
     static int told;
     u32 a = (addr & 0x3FF) * 16;
+    static int want = -2, dumped;
+    if (want == -2) want = getenv("SSTHEH_PRIMS") ? atoi(getenv("SSTHEH_PRIMS")) : -1;
+    if (want >= 0 && (int)kernel_vblank_count() >= want && dumped < 2) {
+        dumped++;
+        fprintf(stderr, "  XGKICK %03X packet:\n", addr & 0x3FF);
+        for (int q = 0; q < 14; q++) {
+            u32 w[4];
+            memcpy(w, vu_mem + ((a + q * 16) & 0x3FFF), 16);
+            fprintf(stderr, "    %03X: %08X %08X %08X %08X\n", ((addr & 0x3FF) + q) & 0x3FF, w[0], w[1], w[2], w[3]);
+        }
+    }
     if (rt_verbose > 1 && told < 40) {
         u64 t[2];
         memcpy(t, vu_mem + a, 16);

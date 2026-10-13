@@ -53,6 +53,7 @@ static void arith(Ctx *c, int kind, int to_acc, int dest, int fd, int fs, const 
 static void bcast(f32 out[4], f32 v) { out[0] = out[1] = out[2] = out[3] = v; }
 
 void vu0_exec(Ctx *c, u32 raw) {
+    if (!(raw & (1u << 25))) rt_fatal(c, "COP2 instruction %08X is not a VU0 macro operation", raw);
     vf0_fix(c);
     int dest = FIELD(raw, 21, 4), ft = FIELD(raw, 16, 5), fs = FIELD(raw, 11, 5), fd = FIELD(raw, 6, 5);
     int low = raw & 0x3F;
