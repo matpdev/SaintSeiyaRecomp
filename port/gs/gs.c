@@ -72,38 +72,57 @@ static const u8 kCol4First[4][32] = {
 static u8 col8[16][16];
 static u16 col4[16][32];
 
+/* Where a pixel lies inside its page, per format, as an index of units of its own size (words for
+ * 32-bit formats, halfwords for 16-bit, bytes for 8-bit, nibbles for 4-bit). A page is 64 x 32
+ * pixels of 32 bits, 64 x 64 of 16, 128 x 64 of 8, 128 x 128 of 4. The depth formats are the
+ * colour formats with the blocks of a page in another order (block number ^ 0x18). */
+static u16 in32[2][32][64], in16[4][64][64], in8[64][128], in4[128][128];
+
 static void tables_init(void) {
     for (int y = 0; y < 16; y++) {
         int col = y >> 2;
         for (int x = 0; x < 16; x++) col8[y][x] = (u8)(kCol8First[y & 3][(col & 1) ? (x ^ 4) : x] + col * 64);
         for (int x = 0; x < 32; x++) col4[y][x] = (u16)(kCol4First[y & 3][(col & 1) ? (x ^ 4) : x] + col * 128);
     }
+    for (int z = 0; z < 2; z++) {
+        u32 zx = z ? 0x18 : 0;
+        for (int y = 0; y < 32; y++)
+            for (int x = 0; x < 64; x++) in32[z][y][x] = (u16)(((kBlock32[(y >> 3) & 3][(x >> 3) & 7] ^ zx) << 6) + kCol32[y & 7][x & 7]);
+        for (int y = 0; y < 64; y++)
+            for (int x = 0; x < 64; x++) {
+                in16[z][y][x] = (u16)(((kBlock16[(y >> 3) & 7][(x >> 4) & 3] ^ zx) << 7) + kCol16[y & 7][x & 15]);
+                in16[2 + z][y][x] = (u16)(((kBlock16S[(y >> 3) & 7][(x >> 4) & 3] ^ zx) << 7) + kCol16[y & 7][x & 15]);
+            }
+    }
+    for (int y = 0; y < 64; y++)
+        for (int x = 0; x < 128; x++) in8[y][x] = (u16)((kBlock32[(y >> 4) & 3][(x >> 4) & 7] << 8) + col8[y & 15][x & 15]);
+    for (int y = 0; y < 128; y++)
+        for (int x = 0; x < 128; x++) in4[y][x] = (u16)((kBlock16[(y >> 4) & 7][(x >> 5) & 3] << 9) + col4[y & 15][x & 31]);
 }
 
 /* Reads (write = 0) or writes the pixel (x, y) of a buffer at bp (blocks), width bw (64 pixels), format psm. */
-static u32 vram_rw(u32 bp, u32 bw, u32 psm, u32 x, u32 y, int write, u32 v) {
-    u32 a, *w, zx = 0;
+static inline u32 vram_rw(u32 bp, u32 bw, u32 psm, u32 x, u32 y, int write, u32 v) {
+    u32 a, *w, z = 0;
     if (bw == 0) bw = 1;
-    if ((psm & 0x30) == 0x30) { zx = 0x18; psm &= 0x0F; }   /* depth formats: blocks in another order */
+    if ((psm & 0x30) == 0x30) { z = 1; psm &= 0x0F; }
     switch (psm) {
-    case 0x02: case 0x0A:
-        a = ((bp + ((y >> 1) & ~0x1Fu) * bw + ((x >> 1) & ~0x1Fu) +
-              ((psm == 0x0A ? kBlock16S : kBlock16)[(y >> 3) & 7][(x >> 4) & 3] ^ zx)) << 7) + kCol16[y & 7][x & 15];
+    case 0x02: case 0x0A:                                   /* 16 bits: halfword index */
+        a = ((bp + (y >> 6) * 32 * bw + (x >> 6) * 32) << 7) + in16[(psm == 0x0A) * 2 + z][y & 63][x & 63];
         w = &vram[(a >> 1) & 0xFFFFF];
         if (write) { *w = (*w & ~(0xFFFFu << ((a & 1) * 16))) | (v & 0xFFFF) << ((a & 1) * 16); return 0; }
         return (*w >> ((a & 1) * 16)) & 0xFFFF;
-    case 0x13:
-        a = ((bp + ((y >> 1) & ~0x1Fu) * (bw >> 1) + ((x >> 2) & ~0x1Fu) + kBlock32[(y >> 4) & 3][(x >> 4) & 7]) << 8) + col8[y & 15][x & 15];
+    case 0x13:                                              /* 8 bits: byte index */
+        a = ((bp + (y >> 6) * 32 * (bw >> 1) + (x >> 7) * 32) << 8) + in8[y & 63][x & 127];
         w = &vram[(a >> 2) & 0xFFFFF];
         if (write) { *w = (*w & ~(0xFFu << ((a & 3) * 8))) | (v & 0xFF) << ((a & 3) * 8); return 0; }
         return (*w >> ((a & 3) * 8)) & 0xFF;
-    case 0x14:
-        a = ((bp + ((y >> 2) & ~0x1Fu) * (bw >> 1) + ((x >> 2) & ~0x1Fu) + kBlock16[(y >> 4) & 7][(x >> 5) & 3]) << 9) + col4[y & 15][x & 31];
+    case 0x14:                                              /* 4 bits: nibble index */
+        a = ((bp + (y >> 7) * 32 * (bw >> 1) + (x >> 7) * 32) << 9) + in4[y & 127][x & 127];
         w = &vram[(a >> 3) & 0xFFFFF];
         if (write) { *w = (*w & ~(0xFu << ((a & 7) * 4))) | (v & 0xF) << ((a & 7) * 4); return 0; }
         return (*w >> ((a & 7) * 4)) & 0xF;
-    default:
-        a = ((bp + (y & ~0x1Fu) * bw + ((x >> 1) & ~0x1Fu) + (kBlock32[(y >> 3) & 3][(x >> 3) & 7] ^ zx)) << 6) + kCol32[y & 7][x & 7];
+    default:                                                /* 32 bits and the formats inside a 32-bit pixel */
+        a = ((bp + (y >> 5) * 32 * bw + (x >> 6) * 32) << 6) + in32[z][y & 31][x & 63];
         w = &vram[a & 0xFFFFF];
         switch (psm) {
         case 0x01: if (write) { *w = (*w & 0xFF000000u) | (v & 0xFFFFFF); return 0; } return *w & 0xFFFFFF;
@@ -113,6 +132,12 @@ static u32 vram_rw(u32 bp, u32 bw, u32 psm, u32 x, u32 y, int write, u32 v) {
         default: if (write) { *w = v; return 0; } return *w;
         }
     }
+}
+
+/* The word holding pixel (x, y) of a 32-bit-wide format (colour 0x00/0x01, depth 0x30/0x31). */
+static inline u32 *word32(u32 bp, u32 bw, u32 x, u32 y, int z) {
+    if (bw == 0) bw = 1;
+    return &vram[(((bp + (y >> 5) * 32 * bw + (x >> 6) * 32) << 6) + in32[z][y & 31][x & 63]) & 0xFFFFF];
 }
 
 static int psm_bits(u32 psm) {
@@ -168,7 +193,59 @@ static u32 texel(int ctx, int u, int v) {
 
 /* ------------------------------------------------------------------------------- pixels */
 
+static void pixel_general(int ctx, int x, int y, u32 z, u32 src);
+
+/* The common case, done with one address computation per buffer: a 32- or 24-bit frame buffer and a
+ * 32- or 24-bit depth buffer. Everything else goes through pixel_general. */
 static void pixel(int ctx, int x, int y, u32 z, u32 src) {
+    u64 fr = gs.frame[ctx], zb = gs.zbuf[ctx], test = gs.test[ctx], sc = gs.scissor[ctx];
+    u32 fpsm = (fr >> 24) & 0x3F, zpsm = (zb >> 24) & 15;
+    if ((fpsm != 0x00 && fpsm != 0x01) || zpsm > 1 || (test & 1)) { pixel_general(ctx, x, y, z, src); return; }
+    if (x < (int)(sc & 0x7FF) || x > (int)((sc >> 16) & 0x7FF) || y < (int)((sc >> 32) & 0x7FF) ||
+        y > (int)((sc >> 48) & 0x7FF) || x < 0 || y < 0)
+        return;
+    u32 fbp = (fr & 0x1FF) << 5, fbw = (fr >> 16) & 0x3F;
+    int zte = (test >> 16) & 1, zwrite = !((zb >> 32) & 1);
+    u32 *zw = NULL;
+    if (zte || zwrite) {
+        u32 zmax = zpsm == 0 ? 0xFFFFFFFFu : 0xFFFFFFu;
+        if (z > zmax) z = zmax;
+        zw = word32((u32)(zb & 0x1FF) << 5, fbw, (u32)x, (u32)y, 1);
+        if (zte) {
+            u32 zd = zpsm == 0 ? *zw : (*zw & 0xFFFFFF);
+            switch ((test >> 17) & 3) {
+            case 0: return;
+            case 1: break;
+            case 2: if (z < zd) return; break;
+            default: if (z <= zd) return; break;
+            }
+        }
+    }
+    u32 *fw = word32(fbp, fbw, (u32)x, (u32)y, 0);
+    u32 sa = src >> 24, m = (u32)(fr >> 32);
+    u32 out = src & 0xFFFFFF;
+    if ((gs.prim >> 6) & 1) {                       /* blending: ((A - B) * C >> 7) + D */
+        u64 al = gs.alpha[ctx];
+        u32 d = *fw | (fpsm == 1 ? 0x80000000u : 0);
+        u32 c = ((al >> 4) & 3) == 0 ? sa : ((al >> 4) & 3) == 1 ? d >> 24 : (u32)((al >> 32) & 0xFF);
+        out = 0;
+        for (int i = 0; i < 3; i++) {
+            int sc_ = (int)((src >> (8 * i)) & 0xFF), dc = (int)((d >> (8 * i)) & 0xFF);
+            int A = (al & 3) == 0 ? sc_ : (al & 3) == 1 ? dc : 0;
+            int B = ((al >> 2) & 3) == 0 ? sc_ : ((al >> 2) & 3) == 1 ? dc : 0;
+            int D = ((al >> 6) & 3) == 0 ? sc_ : ((al >> 6) & 3) == 1 ? dc : 0;
+            int v = (((A - B) * (int)c) >> 7) + D;
+            out |= (u32)(v < 0 ? 0 : v > 255 ? 255 : v) << (8 * i);
+        }
+    }
+    if (gs.fba[ctx]) sa |= 0x80;
+    u32 cval = out | sa << 24;
+    if (fpsm == 1) m |= 0xFF000000u;                /* 24-bit: the top byte is not this buffer's */
+    *fw = m ? (*fw & m) | (cval & ~m) : cval;
+    if (zwrite) *zw = zpsm == 0 ? z : (*zw & 0xFF000000u) | (z & 0xFFFFFF);
+}
+
+static void pixel_general(int ctx, int x, int y, u32 z, u32 src) {
     u64 test = gs.test[ctx], al = gs.alpha[ctx], zb = gs.zbuf[ctx], sc = gs.scissor[ctx], fr = gs.frame[ctx];
     u32 fbp = (fr & 0x1FF) << 5, fbw = (fr >> 16) & 0x3F, fpsm = (fr >> 24) & 0x3F;
     int write_rgb = 1, write_z = !((zb >> 32) & 1);
@@ -268,19 +345,39 @@ static u32 shade(int ctx, u32 vc, float s, float t, float q, int u, int v) {
 
 static u32 vcol(const Vertex *v) { return v->r | v->g << 8 | v->b << 16 | (u32)v->a << 24; }
 
+/* The scissor rectangle of a context, as inclusive pixel bounds. */
+static void scissor_of(int ctx, int *x0, int *x1, int *y0, int *y1) {
+    u64 sc = gs.scissor[ctx];
+    *x0 = (int)(sc & 0x7FF);
+    *x1 = (int)((sc >> 16) & 0x7FF);
+    *y0 = (int)((sc >> 32) & 0x7FF);
+    *y1 = (int)((sc >> 48) & 0x7FF);
+}
+
 static void draw_sprite(int ctx, const Vertex *a, const Vertex *b) {
     if (a->x > b->x) { const Vertex *t = a; a = b; b = t; }
     float x0 = a->x, x1 = b->x, y0 = a->y, y1 = b->y;
     int xa = (int)(x0 + 0.9375f), xb = (int)(x1 + 0.9375f);
     int ya = (int)((y0 <= y1 ? y0 : y1) + 0.9375f), yb = (int)((y0 <= y1 ? y1 : y0) + 0.9375f);
+    int sx0, sx1, sy0, sy1;
+    scissor_of(ctx, &sx0, &sx1, &sy0, &sy1);
+    int xs = xa > sx0 ? xa : sx0, xe = xb < sx1 + 1 ? xb : sx1 + 1;
+    int ys = ya > sy0 ? ya : sy0, ye = yb < sy1 + 1 ? yb : sy1 + 1;
     u32 col = vcol(b);
-    for (int y = ya; y < yb; y++) {
-        float fy = y1 != y0 ? ((float)y - y0) / (y1 - y0) : 0.0f;
-        for (int x = xa; x < xb; x++) {
-            float fx = x1 != x0 ? ((float)x - x0) / (x1 - x0) : 0.0f;
-            pixel(ctx, x, y, b->z, shade(ctx, col, a->s + (b->s - a->s) * fx, a->t + (b->t - a->t) * fy, b->q,
-                                         (int)((float)a->u + (float)(b->u - a->u) * fx),
-                                         (int)((float)a->v + (float)(b->v - a->v) * fy)));
+    float idx = x1 != x0 ? 1.0f / (x1 - x0) : 0.0f, idy = y1 != y0 ? 1.0f / (y1 - y0) : 0.0f;
+    float ds = (b->s - a->s), dt = (b->t - a->t), du = (float)(b->u - a->u), dv = (float)(b->v - a->v);
+    int textured = (gs.prim >> 4) & 1;
+    for (int y = ys; y < ye; y++) {
+        float fy = y1 != y0 ? ((float)y - y0) * idy : 0.0f;
+        float t = a->t + dt * fy;
+        int v = (int)((float)a->v + dv * fy);
+        for (int x = xs; x < xe; x++) {
+            u32 c = col;
+            if (textured) {
+                float fx = x1 != x0 ? ((float)x - x0) * idx : 0.0f;
+                c = shade(ctx, col, a->s + ds * fx, t, b->q, (int)((float)a->u + du * fx), v);
+            }
+            pixel(ctx, x, y, b->z, c);
         }
     }
 }
@@ -292,28 +389,41 @@ static float edge(const Vertex *a, const Vertex *b, float x, float y) {
 static void draw_triangle(int ctx, const Vertex *a, const Vertex *b, const Vertex *c) {
     float area = edge(a, b, c->x, c->y);
     if (area == 0.0f) return;
-    int gouraud = (gs.prim >> 3) & 1;
+    int gouraud = (gs.prim >> 3) & 1, textured = (gs.prim >> 4) & 1;
     float minx = a->x, maxx = a->x, miny = a->y, maxy = a->y;
     if (b->x < minx) minx = b->x; if (c->x < minx) minx = c->x;
     if (b->x > maxx) maxx = b->x; if (c->x > maxx) maxx = c->x;
     if (b->y < miny) miny = b->y; if (c->y < miny) miny = c->y;
     if (b->y > maxy) maxy = b->y; if (c->y > maxy) maxy = c->y;
-    if (minx < 0) minx = 0; if (miny < 0) miny = 0;
-    if (maxx > 2047) maxx = 2047; if (maxy > 2047) maxy = 2047;
-    for (int y = (int)miny; y <= (int)maxy; y++)
-        for (int x = (int)minx; x <= (int)maxx; x++) {
-            double w0 = (double)edge(b, c, (float)x, (float)y) / area, w1 = (double)edge(c, a, (float)x, (float)y) / area;
+    int sx0, sx1, sy0, sy1;
+    scissor_of(ctx, &sx0, &sx1, &sy0, &sy1);
+    int xs = (int)(minx < 0 ? 0 : minx), xe = (int)(maxx > 2047 ? 2047 : maxx);
+    int ys = (int)(miny < 0 ? 0 : miny), ye = (int)(maxy > 2047 ? 2047 : maxy);
+    if (xs < sx0) xs = sx0;
+    if (xe > sx1) xe = sx1;
+    if (ys < sy0) ys = sy0;
+    if (ye > sy1) ye = sy1;
+    if (xs > xe || ys > ye) return;
+    /* barycentric weights, stepped across each row: w0 from edge (b, c), w1 from edge (c, a) */
+    double inv = 1.0 / (double)area;
+    double d0x = -(double)(c->y - b->y) * inv, d1x = -(double)(a->y - c->y) * inv;
+    u32 flat = vcol(c);
+    for (int y = ys; y <= ye; y++) {
+        double w0 = (double)edge(b, c, (float)xs, (float)y) * inv, w1 = (double)edge(c, a, (float)xs, (float)y) * inv;
+        for (int x = xs; x <= xe; x++, w0 += d0x, w1 += d1x) {
             double w2 = 1.0 - w0 - w1;
             if (w0 < 0.0 || w1 < 0.0 || w2 < -1e-9) continue;
             u32 col = gouraud
                 ? (u32)(a->r * w0 + b->r * w1 + c->r * w2 + 0.5) | (u32)(a->g * w0 + b->g * w1 + c->g * w2 + 0.5) << 8 |
                   (u32)(a->b * w0 + b->b * w1 + c->b * w2 + 0.5) << 16 | (u32)(a->a * w0 + b->a * w1 + c->a * w2 + 0.5) << 24
-                : vcol(c);
-            pixel(ctx, x, y, (u32)((double)a->z * w0 + (double)b->z * w1 + (double)c->z * w2 + 0.5),
-                  shade(ctx, col, (float)(a->s * w0 + b->s * w1 + c->s * w2), (float)(a->t * w0 + b->t * w1 + c->t * w2),
-                        (float)(a->q * w0 + b->q * w1 + c->q * w2), (int)(a->u * w0 + b->u * w1 + c->u * w2),
-                        (int)(a->v * w0 + b->v * w1 + c->v * w2)));
+                : flat;
+            if (textured)
+                col = shade(ctx, col, (float)(a->s * w0 + b->s * w1 + c->s * w2), (float)(a->t * w0 + b->t * w1 + c->t * w2),
+                            (float)(a->q * w0 + b->q * w1 + c->q * w2), (int)(a->u * w0 + b->u * w1 + c->u * w2),
+                            (int)(a->v * w0 + b->v * w1 + c->v * w2));
+            pixel(ctx, x, y, (u32)((double)a->z * w0 + (double)b->z * w1 + (double)c->z * w2 + 0.5), col);
         }
+    }
 }
 
 static void draw_line(int ctx, const Vertex *a, const Vertex *b) {
@@ -410,7 +520,39 @@ static void transfer_data(const u8 *p, u32 bytes) {
     if (!gs.transfer || gs.tw == 0) return;
     u32 dbp = (gs.bitbltbuf >> 32) & 0x3FFF, dbw = (gs.bitbltbuf >> 48) & 0x3F, dpsm = (gs.bitbltbuf >> 56) & 0x3F;
     u32 bits = (u32)psm_bits(dpsm), total = gs.tw * gs.th;
-    for (u32 i = 0; i * bits < bytes * 8 && gs.tpos < total; gs.tpos++, i++) {
+    u32 i = 0;
+    if (dpsm == 0x00 || dpsm == 0x02 || dpsm == 0x0A || dpsm == 0x13 || dpsm == 0x14) {
+        /* whole runs of a row with the page tables (textures are uploaded again every frame) */
+        u32 bw = dbw ? dbw : 1, count = bytes * 8 / bits;
+        u8 *v8 = (u8 *)vram;
+        u16 *v16 = (u16 *)vram;
+        while (i < count && gs.tpos < total) {
+            u32 col = gs.tpos % gs.tw, y = gs.ty + gs.tpos / gs.tw, x = gs.tx + col, run = gs.tw - col;
+            if (run > count - i) run = count - i;
+            if (dpsm == 0x00) {
+                u32 base = (dbp + (y >> 5) * 32 * bw) << 6;
+                for (u32 j = 0; j < run; j++, x++) memcpy(&vram[(base + ((x >> 6) << 11) + in32[0][y & 31][x & 63]) & 0xFFFFF], p + (i + j) * 4, 4);
+            } else if (dpsm == 0x13) {
+                u32 base = (dbp + (y >> 6) * 32 * (bw >> 1)) << 8;
+                for (u32 j = 0; j < run; j++, x++) v8[(base + ((x >> 7) << 13) + in8[y & 63][x & 127]) & 0x3FFFFF] = p[i + j];
+            } else if (dpsm == 0x14) {
+                u32 base = (dbp + (y >> 7) * 32 * (bw >> 1)) << 9;
+                for (u32 j = 0; j < run; j++, x++) {
+                    u32 a = base + ((x >> 7) << 14) + in4[y & 127][x & 127], k = i + j;
+                    u8 *b = &v8[(a >> 1) & 0x3FFFFF];
+                    u32 cv = (p[k >> 1] >> ((k & 1) * 4)) & 15;
+                    *b = (a & 1) ? (u8)((*b & 0x0F) | cv << 4) : (u8)((*b & 0xF0) | cv);
+                }
+            } else {
+                u32 base = (dbp + (y >> 6) * 32 * bw) << 7;
+                for (u32 j = 0; j < run; j++, x++)
+                    memcpy(&v16[(base + ((x >> 6) << 12) + in16[(dpsm == 0x0A) * 2][y & 63][x & 63]) & 0x1FFFFF], p + (i + j) * 2, 2);
+            }
+            i += run;
+            gs.tpos += run;
+        }
+    }
+    for (; i * bits < bytes * 8 && gs.tpos < total; gs.tpos++, i++) {
         u32 x = gs.tx + gs.tpos % gs.tw, y = gs.ty + gs.tpos / gs.tw, c;
         switch (bits) {
         case 32: c = p[i * 4] | p[i * 4 + 1] << 8 | p[i * 4 + 2] << 16 | (u32)p[i * 4 + 3] << 24; break;

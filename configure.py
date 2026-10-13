@@ -70,8 +70,12 @@ def main():
         code = [s for s in sources if not s.startswith("asm/data/")]
         n.rule("recomp", f"{sys.executable} -I tools/recomp/recomp.py {TARGET} build/recomp $in",
                description="recomp", restat=True)
-        n.rule("cc", "gcc -c -O1 -g -w -fno-strict-aliasing -Iport/runtime -Iport/kernel -Iport/iop -Iport/gs -Ibuild/recomp "
-                     "-MMD -MF $out.d $in -o $out", depfile="$out.d", deps="gcc", description="cc $in")
+        inc = "-Iport/runtime -Iport/kernel -Iport/iop -Iport/gs -Ibuild/recomp"
+        # the translated code builds fast at -O1; the runtime and the renderer get -O2
+        n.rule("cc", f"gcc -c -O1 -g -w -fno-strict-aliasing -march=native {inc} -MMD -MF $out.d $in -o $out",
+               depfile="$out.d", deps="gcc", description="cc $in")
+        n.rule("cc_fast", f"gcc -c -O2 -g -w -fno-strict-aliasing -march=native {inc} -MMD -MF $out.d $in -o $out",
+               depfile="$out.d", deps="gcc", description="cc $in")
         n.rule("link", "gcc -rdynamic $in -o $out -lm -lpthread -lSDL3 -ldl", description="link $out")
         rc_files = [f"build/recomp/rc_{k:03d}.c" for k in range(RC_FILES)] + ["build/recomp/functab.c"]
         n.build(rc_files, "recomp", code, implicit=["tools/recomp/recomp.py", "port/hle.txt"])
@@ -79,7 +83,7 @@ def main():
         port_objs = []
         for src in rc_files + port_srcs:
             o = "build/port/" + src.replace("/", "_")[:-2] + ".o"
-            n.build(o, "cc", src, order_only=rc_files)
+            n.build(o, "cc" if src.startswith("build/recomp/") else "cc_fast", src, order_only=rc_files)
             port_objs.append(o)
         n.build("build/sstheh", "link", port_objs)
         n.build("port", "phony", "build/sstheh")
