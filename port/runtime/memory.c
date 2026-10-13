@@ -98,3 +98,10 @@ int memory_load_elf(const char *path, u32 *entry) {
     *entry = e;
     return 0;
 }
+
+/* GS privileged registers (PMODE, DISPFB, DISPLAY, ...), by offset from 0x12000000 */
+u64 gs_priv_read(u32 off) {
+    u64 v;
+    memcpy(&v, io_gs + (off & 0x1FF8), 8);
+    return v;
+}

@@ -14,3 +14,6 @@ void vif_tag(int vif, const u8 *two_codes);       /* the upper half of a DMA tag
 
 /* kernel.c: deliver a DMAC interrupt for channel `ch` at the next safe point */
 void kernel_raise_dmac(int ch);
+
+/* memory.c */
+u64 gs_priv_read(u32 offset);

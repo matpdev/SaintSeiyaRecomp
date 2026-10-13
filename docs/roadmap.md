@@ -39,7 +39,11 @@ do hardware do PS2. A decomp matching continua em paralelo, e cada função deco
   - inicializa o DMAC e manda os primeiros pacotes ao VIF0/VIF1/GIF; cria 11 threads.
   Para na inicialização do PS2RNA da CRI (`0x264710`), que espera o módulo `CRI_ADXI.IRX` do IOP.
 
-## Próximos passos
+- Marco 4 (primeira imagem): **concluído em 2026-10-13**. DMAC, VIF1, GIF e GS em software
+  (`port/gs/`, adaptado do Tenkaichi3Decomp); janela SDL3; `--shot N,M` salva capturas em `build/`.
+  O jogo mostra a tela "Select your language".
+
+## Próximos passos (antigos)
 
 1. **CRI ADXI** (servidor `0x90000200`): simular o lado IOP do ADX o suficiente para o PS2RNA iniciar;
    depois, áudio de verdade (o `snd_adx.c` do Tenkaichi3Decomp decodifica ADX).
