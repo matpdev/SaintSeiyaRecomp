@@ -70,7 +70,7 @@ def main():
         code = [s for s in sources if not s.startswith("asm/data/")]
         n.rule("recomp", f"{sys.executable} -I tools/recomp/recomp.py {TARGET} build/recomp $in",
                description="recomp", restat=True)
-        inc = "-Iport/runtime -Iport/kernel -Iport/iop -Iport/gs -Ibuild/recomp"
+        inc = "-Iport/runtime -Iport/kernel -Iport/iop -Iport/gs -Ibuild/recomp -Ibuild/shaders"
         # the translated code builds fast at -O1; the runtime and the renderer get -O2
         n.rule("cc", f"gcc -c -O1 -g -w -fno-strict-aliasing -march=native {inc} -MMD -MF $out.d $in -o $out",
                depfile="$out.d", deps="gcc", description="cc $in")
@@ -83,8 +83,18 @@ def main():
         port_objs = []
         for src in rc_files + port_srcs:
             o = "build/port/" + src.replace("/", "_")[:-2] + ".o"
-            n.build(o, "cc" if src.startswith("build/recomp/") else "cc_fast", src, order_only=rc_files)
+            n.build(o, "cc" if src.startswith("build/recomp/") else "cc_fast", src,
+                    order_only=rc_files + ["build/shaders/shaders.h"])
             port_objs.append(o)
+        # shaders: GLSL -> SPIR-V -> a header of byte arrays
+        n.rule("glslc", "glslc -O $in -o $out", description="glslc $in")
+        n.rule("spvhdr", f"{sys.executable} -I tools/spv2h.py $out $in", description="shaders.h")
+        spvs = []
+        for sh in sorted(glob.glob("port/gs/shaders/*.vert") + glob.glob("port/gs/shaders/*.frag")):
+            out = "build/shaders/" + os.path.basename(sh) + ".spv"
+            n.build(out, "glslc", sh)
+            spvs.append(out)
+        n.build("build/shaders/shaders.h", "spvhdr", spvs, implicit=["tools/spv2h.py"])
         n.build("build/sstheh", "link", port_objs)
         n.build("port", "phony", "build/sstheh")
     print(f"build.ninja written: {len(sources)} asm files, {len(bins)} binary files")

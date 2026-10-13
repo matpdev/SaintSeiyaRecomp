@@ -60,6 +60,11 @@ int main(int argc, char **argv) {
     }
     rt_log("main", "loaded %s, entry %08X", elf, entry);
     prof_start();
+    {
+        extern int gpu_on;
+        const char *r = getenv("SSTHEH_GS");
+        gpu_on = !(r && !strcmp(r, "sw"));
+    }
     /* the game runs on host threads of its own; this thread shows the picture */
     pthread_t game;
     pthread_attr_t a;

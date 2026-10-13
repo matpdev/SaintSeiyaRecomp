@@ -16,7 +16,10 @@
 #include "gs.h"
 #include "pad.h"
 #include "perf.h"
+#include "gpu.h"
 #include <sys/resource.h>
+
+void gpu_set_overlay(const u32 *px, int w, int h);   /* gpu_vk.c */
 
 int gs_display(u32 *out, int max_w, int max_h, int *w, int *h);
 void gs_init(void);
@@ -121,17 +124,26 @@ static void save_ppm(const char *path, const u32 *px, int w, int h) {
 static void panel_update(void);
 
 /* Headless: save the picture at each vertical blank listed (ascending), then exit. */
+/* GPU renderer: replay what the game drew since the last vertical blank */
+static void gpu_vblank(void) {
+    if (!gpu_on) return;
+    gpu_render(gpu_take_frame());
+}
+
 int display_shots(const int *at, int n) {
     gs_init();
+    if (gpu_on && (!SDL_Init(SDL_INIT_VIDEO) || gpu_init(NULL))) gpu_on = 0;
     for (int k = 0; k < n; k++) {
         u32 seen = 0;
         while ((int)kernel_vblank_count() < at[k]) {
             pad_buttons[0] = scripted(kernel_vblank_count());
-            if (kernel_vblank_count() != seen) { seen = kernel_vblank_count(); panel_update(); }
+            if (kernel_vblank_count() != seen) { seen = kernel_vblank_count(); panel_update(); gpu_vblank(); }
             usleep(2000);
         }
         int w, h;
-        gs_display(frame, 1024, 1024, &w, &h);
+        gpu_vblank();
+        if (gpu_on) gpu_read_display(frame, 1024, 1024, &w, &h);
+        else gs_display(frame, 1024, 1024, &w, &h);
         char path[64];
         snprintf(path, sizeof path, "build/shot_%04d.ppm", at[k]);
         save_ppm(path, frame, w, h);
@@ -204,8 +216,56 @@ static void panel_draw(SDL_Renderer *ren) {
 }
 
 /* Window: shows the displayed buffer at every vertical blank until it is closed. */
+static void overlay_update(void) {
+    static SDL_Surface *surf;
+    static SDL_Renderer *sr;
+    if (!panel_on) { gpu_set_overlay(NULL, 0, 0); return; }
+    if (!surf) {
+        surf = SDL_CreateSurface(8 * 46 + 8, 4 * 10 + 8, SDL_PIXELFORMAT_ABGR8888);
+        sr = SDL_CreateSoftwareRenderer(surf);
+    }
+    SDL_SetRenderDrawColor(sr, 0, 0, 0, 170);
+    SDL_RenderClear(sr);
+    SDL_SetRenderDrawColor(sr, 255, 255, 0, 255);
+    for (int i = 0; i < 4; i++) SDL_RenderDebugText(sr, 4, 4 + i * 10, panel.line[i]);
+    SDL_RenderPresent(sr);
+    gpu_set_overlay(surf->pixels, surf->w, surf->h);
+}
+
+/* Window with the GPU renderer: every vertical blank, replay the recorded draws and present. */
+static int display_window_gpu(void) {
+    SDL_Window *win = SDL_CreateWindow("Saint Seiya: The Hades", 1280, 960, SDL_WINDOW_RESIZABLE);
+    if (!win || gpu_init(win)) return -1;
+    u32 shown = 0;
+    for (;;) {
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_EVENT_QUIT) { SDL_Quit(); _exit(0); }
+            if (e.type == SDL_EVENT_GAMEPAD_ADDED && !gamepad) gamepad = SDL_OpenGamepad(e.gdevice.which);
+            if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F3) panel_on = !panel_on;
+        }
+        pad_buttons[0] = keyboard() | gamepad_buttons() | scripted(kernel_vblank_count());
+        u32 vb = kernel_vblank_count();
+        if (vb == shown) { SDL_Delay(1); continue; }
+        shown = vb;
+        gpu_render(gpu_take_frame());
+        u64 before = perf.prims;
+        panel_update();
+        (void)before;
+        static u32 last_overlay;
+        if (vb - last_overlay >= 25) { last_overlay = vb; overlay_update(); }
+        gpu_present();
+    }
+}
+
 int display_window(void) {
     gs_init();
+    if (gpu_on) {
+        if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1; }
+        if (display_window_gpu() == 0) return 0;
+        fprintf(stderr, "GPU renderer unavailable, using the software one\n");
+        gpu_on = 0;
+    }
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1; }
     SDL_Window *win = SDL_CreateWindow("Saint Seiya: The Hades", 1280, 896, SDL_WINDOW_RESIZABLE);
     SDL_Renderer *ren = SDL_CreateRenderer(win, NULL);

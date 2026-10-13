@@ -437,6 +437,8 @@ static void draw_line(int ctx, const Vertex *a, const Vertex *b) {
 
 u64 gs_prims;
 u32 kernel_vblank_count(void);
+static void record(int ctx, int type, const Vertex *v);   /* GPU recording, below */
+extern int gpu_on;
 
 /* SSTHEH_PRIMS=<vblank>: list the first 40 primitives drawn from that vertical blank on (tests) */
 static void prim_log(int ctx, int type) {
@@ -472,6 +474,18 @@ static void vertex(u32 x, u32 y, u32 z, int kick) {
     if (gs.vcount < 3) gs.vtx[gs.vcount++] = v;
     else { gs.vtx[0] = gs.vtx[1]; gs.vtx[1] = gs.vtx[2]; gs.vtx[2] = v; }
     if (kick && gs.vcount >= (type == 6 || type == 1 || type == 2 ? 2 : type == 0 ? 1 : 3)) prim_log(ctx, type);
+    if (gpu_on) {
+        /* same vertex bookkeeping as below, recording instead of drawing */
+        int need = type == 0 ? 1 : (type == 1 || type == 2 || type == 6) ? 2 : 3;
+        if (gs.vcount >= need) {
+            if (kick && type <= 6 && type != 7) { record(ctx, type, gs.vtx); gs_prims++; perf.prims++; }
+            if (type == 2) { gs.vtx[0] = gs.vtx[1]; gs.vcount = 1; }
+            else if (type == 4) { /* strip: keep the last two (shifted on the next vertex) */ }
+            else if (type == 5) { gs.vtx[1] = gs.vtx[2]; gs.vcount = 2; }
+            else gs.vcount = 0;
+        }
+        return;
+    }
     switch (type) {
     case 0: if (kick) { pixel(ctx, (int)v.x, (int)v.y, v.z, vcol(&v)); gs_prims++; perf.prims++; } gs.vcount = 0; break;
     case 1: if (gs.vcount == 2) { if (kick) { draw_line(ctx, &gs.vtx[0], &gs.vtx[1]); gs_prims++; perf.prims++; } gs.vcount = 0; } break;
@@ -490,6 +504,181 @@ static void vertex(u32 x, u32 y, u32 z, int kick) {
     }
 }
 
+/* ------------------------------------------------------------------------------- GPU recording */
+
+#include <pthread.h>
+#include "gpu.h"
+
+int gpu_on;
+static u32 page_gen[512];                  /* bumped when anything writes into that 8 KB page */
+static u8 rt_fbp[512];                     /* frame buffers drawn to (FBP), for render-to-texture */
+static pthread_mutex_t rec_lock = PTHREAD_MUTEX_INITIALIZER;
+static GpuFrame frames[2], *rec = &frames[0];
+
+static void pages_written(u32 bp_blocks, u32 blocks) {
+    for (u32 pg = bp_blocks / 32; pg <= (bp_blocks + blocks) / 32 && pg < bp_blocks / 32 + 512; pg++) page_gen[pg & 511]++;
+}
+
+#define GROW(arr, n, cap, type) do { if ((n) >= (cap)) { (cap) = (cap) ? (cap) * 2 : 1024; \
+    (arr) = (type *)realloc((arr), (size_t)(cap) * sizeof(type)); } } while (0)
+
+GpuFrame *gpu_take_frame(void) {
+    static GpuFrame *given;
+    pthread_mutex_lock(&rec_lock);
+    GpuFrame *done = rec;
+    rec = done == &frames[0] ? &frames[1] : &frames[0];
+    for (u32 i = 0; i < rec->nuploads; i++) free(rec->uploads[i].px);
+    rec->ndraws = rec->nverts = rec->nuploads = 0;
+    pthread_mutex_unlock(&rec_lock);
+    given = done;
+    return given;
+}
+
+/* ---- texture cache: decoded RGBA by (TEX0, TEXA, versions of the pages read) */
+typedef struct { u64 key[3]; u32 id; } TexSlot;
+static TexSlot tex_cache[8192];
+static u32 next_tex_id = 1;
+
+static u64 pages_version(u32 bp, u32 bytes) {
+    u64 h = 1469598103934665603ull;
+    u32 first = bp / 32, last = (bp + (bytes + 255) / 256) / 32;
+    for (u32 pg = first; pg <= last && pg < first + 512; pg++) h = (h ^ page_gen[pg & 511]) * 1099511628211ull ^ pg;
+    return h;
+}
+
+static s32 texture_for(int ctx, u32 *w_out, u32 *h_out) {
+    u64 t0 = gs.tex0[ctx];
+    u32 tbp = t0 & 0x3FFF, tbw = (t0 >> 14) & 0x3F, psm = (t0 >> 20) & 0x3F;
+    u32 tw = 1u << ((t0 >> 26) & 15), th = 1u << ((t0 >> 30) & 15);
+    u32 cbp = (t0 >> 37) & 0x3FFF, cpsm = (t0 >> 51) & 15, csa = (t0 >> 56) & 31;
+    if (tw > 1024) tw = 1024;
+    if (th > 1024) th = 1024;
+    *w_out = tw;
+    *h_out = th;
+    /* a frame buffer the game drew into, read as a 32/24-bit texture: the render target itself */
+    if ((tbp & 31) == 0 && rt_fbp[(tbp >> 5) & 511] && psm_bits(psm) >= 24) return -2 - (s32)(tbp >> 5);
+    u32 bits = psm_bits(psm);
+    u64 key[3] = {t0 & 0x1FFFFFFFFFFFFFFFull, gs.texa,
+                  pages_version(tbp, (tbw ? tbw : 1) * 64 * th * bits / 8) * 31 + (bits <= 8 ? pages_version(cbp, 1024) : 0)};
+    u32 slot = (u32)((key[0] ^ key[1] * 7 ^ key[2] * 13) % 8192);
+    TexSlot *ts = &tex_cache[slot];
+    if (ts->id && !memcmp(ts->key, key, sizeof key)) return (s32)ts->id;
+    /* decode */
+    u32 *px = malloc((size_t)tw * th * 4);
+    for (u32 y = 0; y < th; y++)
+        for (u32 x = 0; x < tw; x++) {
+            u32 c = vram_rw(tbp, tbw, psm, x, y, 0, 0);
+            if (bits > 8) c = expand(c, psm);
+            else if (bits == 8) {
+                c = (c & 0xE7) | ((c & 8) << 1) | ((c & 0x10) >> 1);
+                c = expand(vram_rw(cbp, 1, cpsm, c & 15, c >> 4, 0, 0), cpsm);
+            } else {
+                c += (csa & 15) * 16;
+                c = expand(vram_rw(cbp, 1, cpsm, c & 7, (c >> 3) & 31, 0, 0), cpsm);
+            }
+            px[y * tw + x] = c;
+        }
+    memcpy(ts->key, key, sizeof key);
+    ts->id = next_tex_id++;
+    GROW(rec->uploads, rec->nuploads, rec->cap_uploads, GpuTexUpload);
+    rec->uploads[rec->nuploads++] = (GpuTexUpload){ts->id, tw, th, px};
+    return (s32)ts->id;
+}
+
+static void put_vertex(const Vertex *v, u32 z_shift, const Vertex *colour_of, int fst) {
+    GROW(rec->verts, rec->nverts, rec->cap_verts, GpuVertex);
+    GpuVertex *o = &rec->verts[rec->nverts++];
+    const Vertex *c = colour_of ? colour_of : v;
+    o->x = v->x;
+    o->y = v->y;
+    o->z = (float)((double)v->z / (double)(1ull << z_shift));
+    o->r = c->r; o->g = c->g; o->b = c->b; o->a = c->a;
+    if (fst) { o->s = v->u / 16.0f; o->t = v->v / 16.0f; o->q = 1.0f; }
+    else { o->s = v->s; o->t = v->t; o->q = v->q; }
+    o->_p0 = o->_p1 = 0;
+}
+
+/* One primitive (points become 1-pixel quads, lines 1-pixel-wide quads, sprites two triangles). */
+static void record(int ctx, int type, const Vertex *v) {
+    pthread_mutex_lock(&rec_lock);
+    u64 fr = gs.frame[ctx], zb = gs.zbuf[ctx], test = gs.test[ctx], t0 = gs.tex0[ctx], cl = gs.clamp[ctx];
+    GROW(rec->draws, rec->ndraws, rec->cap_draws, GpuDraw);
+    GpuDraw *d = &rec->draws[rec->ndraws];
+    memset(d, 0, sizeof *d);
+    d->fbp = fr & 0x1FF;
+    d->fbw = (fr >> 16) & 0x3F;
+    d->fpsm = (fr >> 24) & 0x3F;
+    d->fbmsk = (u32)(fr >> 32);
+    d->zbp = zb & 0x1FF;
+    d->zpsm = (zb >> 24) & 15;
+    d->zwrite = !((zb >> 32) & 1);
+    d->ztst = !((test >> 16) & 1) ? 0 : 1 + ((test >> 17) & 3);
+    if (d->ztst == 0) d->zwrite = 0;           /* (ZTE = 0 is not allowed by the GS; treat as no depth) */
+    d->abe = (gs.prim >> 6) & 1;
+    d->alpha = gs.alpha[ctx];
+    d->atest[0] = test & 1;
+    d->atest[1] = (test >> 1) & 7;
+    d->atest[2] = (test >> 4) & 0xFF;
+    d->atest[3] = (test >> 12) & 3;
+    d->textured = (gs.prim >> 4) & 1;
+    d->tfx = (t0 >> 35) & 3;
+    d->tcc = (t0 >> 34) & 1;
+    d->fst = (gs.prim >> 8) & 1;
+    d->tex = -1;
+    if (d->textured) d->tex = texture_for(ctx, &d->tw, &d->th);
+    d->filter = (gs.tex1[ctx] >> 5) & 1;
+    u32 wms = cl & 3, wmt = (cl >> 2) & 3;
+    d->wrap_u = wms != 0 && wms != 3;
+    d->wrap_v = wmt != 0 && wmt != 3;
+    d->region[0] = -1;
+    if (wms == 2 || wmt == 2) {
+        d->region[0] = wms == 2 ? (float)((cl >> 4) & 0x3FF) : 0;
+        d->region[2] = wms == 2 ? (float)((cl >> 14) & 0x3FF) : 4096;
+        d->region[1] = wmt == 2 ? (float)((cl >> 24) & 0x3FF) : 0;
+        d->region[3] = wmt == 2 ? (float)((cl >> 34) & 0x3FF) : 4096;
+    }
+    u64 sc = gs.scissor[ctx];
+    d->scissor[0] = sc & 0x7FF;
+    d->scissor[1] = (sc >> 16) & 0x7FF;
+    d->scissor[2] = (sc >> 32) & 0x7FF;
+    d->scissor[3] = (sc >> 48) & 0x7FF;
+    d->fba = gs.fba[ctx] & 1;
+    d->first = rec->nverts;
+    u32 zs = d->zpsm == 0 ? 32 : d->zpsm == 1 ? 24 : 16;
+    int fst = d->fst, gouraud = (gs.prim >> 3) & 1;
+    switch (type) {
+    case 3: case 4: case 5: {                   /* triangle */
+        const Vertex *flat = gouraud ? NULL : &v[2];
+        for (int i = 0; i < 3; i++) put_vertex(&v[i], zs, flat, fst);
+        break;
+    }
+    case 6: {                                   /* sprite: corners from the two vertices */
+        Vertex q[4] = {v[0], v[1], v[0], v[1]};
+        q[2].x = v[1].x; q[2].s = v[1].s; q[2].u = v[1].u;          /* top right */
+        q[3].x = v[0].x; q[3].s = v[0].s; q[3].u = v[0].u;          /* bottom left */
+        q[2].y = v[0].y; q[2].t = v[0].t; q[2].v = v[0].v;
+        q[3].y = v[1].y; q[3].t = v[1].t; q[3].v = v[1].v;
+        for (int i = 0; i < 4; i++) { q[i].z = v[1].z; q[i].q = v[1].q; }
+        const Vertex *order[6] = {&q[0], &q[2], &q[3], &q[2], &q[1], &q[3]};
+        for (int i = 0; i < 6; i++) put_vertex(order[i], zs, &v[1], fst);
+        break;
+    }
+    default: {                                  /* point / line: a thin quad */
+        Vertex a = v[0], b = type == 0 ? v[0] : v[1];
+        Vertex q[4] = {a, b, a, b};
+        q[0].x -= 0.5f; q[2].x += 0.5f; q[1].x -= 0.5f; q[3].x += 0.5f;
+        q[0].y -= 0.5f; q[1].y += 0.5f; q[2].y -= 0.5f; q[3].y += 0.5f;
+        const Vertex *order[6] = {&q[0], &q[1], &q[2], &q[2], &q[1], &q[3]};
+        for (int i = 0; i < 6; i++) put_vertex(order[i], zs, &b, fst);
+        break;
+    }
+    }
+    d->count = rec->nverts - d->first;
+    rec->ndraws++;
+    rt_fbp[d->fbp & 511] = 1;
+    pthread_mutex_unlock(&rec_lock);
+}
+
 /* ------------------------------------------------------------------------------- transfers */
 
 static void local_to_local(void) {
@@ -503,6 +692,7 @@ static void local_to_local(void) {
         for (u32 x = 0; x < w; x++) tmp[y * w + x] = vram_rw(sbp, sbw, spsm, sx + x, sy + y, 0, 0);
     for (u32 y = 0; y < h; y++)
         for (u32 x = 0; x < w; x++) vram_rw(dbp, dbw, dpsm, dx + x, dy + y, 1, tmp[y * w + x]);
+    pages_written(dbp, ((dbw ? dbw : 1) * 64 * (dy + h) * (u32)psm_bits(dpsm) / 8 + 255) / 256);
 }
 
 static void transfer_begin(void) {
@@ -519,6 +709,7 @@ static void transfer_begin(void) {
 static void transfer_data(const u8 *p, u32 bytes) {
     if (!gs.transfer || gs.tw == 0) return;
     u32 dbp = (gs.bitbltbuf >> 32) & 0x3FFF, dbw = (gs.bitbltbuf >> 48) & 0x3F, dpsm = (gs.bitbltbuf >> 56) & 0x3F;
+    pages_written(dbp, ((dbw ? dbw : 1) * 64 * (gs.ty + gs.th + 64) * (u32)psm_bits(dpsm) / 8 + 255) / 256);
     u32 bits = (u32)psm_bits(dpsm), total = gs.tw * gs.th;
     u32 i = 0;
     if (dpsm == 0x00 || dpsm == 0x02 || dpsm == 0x0A || dpsm == 0x13 || dpsm == 0x14) {
