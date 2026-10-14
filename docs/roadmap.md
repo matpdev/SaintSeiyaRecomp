@@ -29,6 +29,13 @@ do hardware do PS2. A decomp matching continua em paralelo, e cada função deco
 
 ## Estado
 
+**Atualizado em 2026-10-14:** marcos 1 a 6 concluídos. O jogo roda nativamente da tela de título às lutas
+em 3D, com som (CRI ADXI, RSSD) e controle (PADMAN). Renderer Vulkan pelo SDL3 GPU, programas de VU1
+traduzidos para código nativo, 60 Hz com quadros interpolados. Faltam os vídeos (marco 7), o memory card e
+testes do começo ao fim. O histórico abaixo registra como cada marco foi alcançado.
+
+### Histórico
+
 - Marco 0 (preparação): concluído. O build é idêntico ao original e há 327 funções de biblioteca nomeadas.
 - Marco 1: concluído. As 13.855 funções são traduzidas para C (`tools/recomp/recomp.py`) e compilam.
 - Marco 2: quase concluído. `build/sstheh` roda crt0, a inicialização do SDK e `main`. O jogo:
