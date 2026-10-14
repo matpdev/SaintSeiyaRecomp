@@ -16,14 +16,14 @@ vozes e controle.
 | Build matching | `SLES_541.62` reconstruído **byte a byte** a partir do assembly gerado pelo splat |
 | Recompilador | as 13.855 funções do executável traduzidas de MIPS R5900 para C (`tools/recomp/`) |
 | CPU / kernel | registradores de 128 bits, FPU do PS2, VU0 em modo macro; threads, semáforos, interrupções, timers |
-| IOP | SIF/RPC, leitura do disco a partir do ISO, controle (PADMAN), CRI ADXI (som), RSSD (só o protocolo); memory card (libmc2) sobre uma pasta |
+| IOP | SIF/RPC, leitura do disco a partir do ISO, controle (PADMAN), CRI ADXI (som); o driver de som do jogo (SSD/RSSD) roda como está, num interpretador MIPS do IOP com SPU2 emulado; memory card (libmc2) sobre uma pasta |
 | Gráficos | DMAC → VIF → GIF → GS em thread própria; renderer Vulkan (SDL3 GPU) e GS em software; programas de VU1 traduzidos para código nativo |
 | Imagem | resolução interna pela resolução da tela, supersampling, filtro anisotrópico |
 | Taxa de quadros | 60 Hz (modo NTSC do próprio jogo, com a região europeia); quadros interpolados entre os do jogo, sem limite (ou vsync, F4) |
-| Som | **música e vozes** (CRI ADX) tocam; **efeitos sonoros** (driver RSSD da Dimps: golpes, passos, menus) ainda não |
+| Som | música e vozes (CRI ADX) e **efeitos sonoros** (golpes, passos, menus: o driver SSD/RSSD do disco, interpretado, tocando num SPU2 emulado) |
 | Decompilação | compilador identificado (Metrowerks CodeWarrior PS2 3.0.1, `-O3`, C++), 327 funções de biblioteca nomeadas; nenhuma função do jogo decompilada ainda |
 | Memory card | o slot 1 é uma pasta (`~/.local/share/sstheh/memcard1`): o jogo salva e carrega normalmente |
-| Falta | efeitos sonoros, vídeos (Sofdec/MPEG-2 via IPU), testes do começo ao fim, Windows/macOS |
+| Falta | reverb do SPU2 (o jogo o deixa desligado na maior parte), vídeos (Sofdec/MPEG-2 via IPU), testes do começo ao fim, Windows/macOS |
 
 Detalhes em [`docs/roadmap.md`](docs/roadmap.md) e [`docs/recon.md`](docs/recon.md).
 
@@ -95,13 +95,14 @@ indicados, sem janela). Variáveis de ambiente:
 | `SSTHEH_UNLOCK_ALL=1` | cheat: libera tudo (modos, personagens, cenários, extras); salvando, fica no save |
 | `SSTHEH_MEMCARD=pasta` | onde fica o memory card (padrão `~/.local/share/sstheh/memcard1`) |
 | `SSTHEH_AUDIO=0` | sem som |
+| `SSTHEH_RSSD_HLE=1` | não roda o driver de efeitos sonoros (só música e vozes, como antes) |
+| `SSTHEH_AUDIO_DUMP=a.wav`, `SSTHEH_SPU_DUMP=b.raw` | grava o som (a mistura em WAV; só o SPU2 em PCM 16 bits estéreo 48 kHz) |
 | `SSTHEH_GS=sw` | GS em software em vez de Vulkan (lento) |
 | `SSTHEH_VUJIT=0`, `SSTHEH_GSTHREAD=0`, `SSTHEH_UPLOAD_DEDUP=0` | desligam otimizações (para comparar se algo sair errado) |
 | `SSTHEH_PERF_LOG=1` | escreve no terminal o que o painel F3 mostra |
 
 ### Problemas conhecidos
 
-- efeitos sonoros não tocam (só música e vozes)
 - vídeos não tocam
 - o primeiro uso de cada efeito visual pode engasgar enquanto o código do VU1 compila
 - se algo quebrar, rode com `-v` e anexe o log ao relato, junto com o que estava fazendo na hora
@@ -130,6 +131,7 @@ O ee-gcc 2.96 é um binário i386: é preciso suporte a programas de 32 bits.
 | `tools/recomp/` | recompilador estático MIPS → C |
 | `port/runtime/`, `port/kernel/` | CPU, memória, timers, syscalls do kernel |
 | `port/iop/`, `port/hle/` | serviços do IOP e funções do SDK substituídas por nativas (lista em `port/hle.txt`) |
+| `port/iop/lle/` | módulos do IOP rodando como estão: interpretador MIPS I, carregador de IRX, módulos do sistema nativos, SPU2 |
 | `port/gs/` | DMA, VIF, VU, GS e renderer Vulkan |
 | `tools/fdiff.py` | compila um `.cpp` e compara cada função com o original |
 | `tools/recon/` | scripts de reconhecimento (classificação de compiladores, referências cruzadas) |

@@ -1,8 +1,9 @@
 /*
  * RSSD: the game's own sound driver on the IOP (SSD.IRX / RSSD.IRX, by Dimps), server 0x900.
  *
- * Placeholder until the driver is reimplemented: it accepts every request without playing
- * anything, and answers the start-up handshake the EE side (SsdEE) waits for. The driver talks
+ * The driver itself runs in port/iop/lle (the modules from the disc, interpreted). This stand-in,
+ * kept for SSTHEH_RSSD_HLE=1 (no sound effects), accepts every request without playing anything,
+ * and answers the start-up handshake the EE side (SsdEE) waits for. The driver talks
  * back to the EE through the EE's own RPC server 0x901; the command number is the RPC function
  * number and the data a 32-byte message. 0xF0 ends initialisation: +0x04 status (0 = ok).
  * 0x25 answers each chunk of a data transfer (EE commands 0x20, 0x21).

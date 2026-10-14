@@ -23,6 +23,11 @@ typedef u32 (*RpcHandler)(Ctx *c, u32 fn, u8 *in, u32 in_size, u8 *out, u32 out_
 void iop_register_server(u32 sid, const char *name, RpcHandler handler);
 /* Queue a call from the IOP to an RPC server the EE registered (sceSifRegisterRpc on the EE). */
 void iop_call_ee(u32 sid, u32 fn, const void *data, u32 size);
+/* Send what iop_call_ee queued (from the EE's interrupt loop). */
+void iop_kick(Ctx *c);
 
 static inline u32 iop_rd32(u32 a) { u32 v; memcpy(&v, iop_ram + (a & (IOP_RAM_SIZE - 1)), 4); return v; }
 static inline void iop_wr32(u32 a, u32 v) { memcpy(iop_ram + (a & (IOP_RAM_SIZE - 1)), &v, 4); }
+/* The receive buffer of a server whose module gave its own (port/iop/lle), and the server being called. */
+void iop_set_server_buffer(u32 sid, u32 buff);
+extern u32 iop_current_sid;

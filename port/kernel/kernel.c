@@ -194,7 +194,7 @@ static void run_handlers(Handler *list, int cause) {
         Handler *h = &list[i];
         if (!h->used || h->cause != cause || !h->enabled) continue;
         static u8 told[2][16];
-        if (cause < 16 && !told[list == dmac][cause]++)
+        if (cause < 16 && told[list == dmac][cause] < 255 && !told[list == dmac][cause]++)
             rt_log("kernel", "first %s interrupt %d -> %08X", list == dmac ? "DMAC" : "INTC", cause, h->handler);
         irq_ctx.r[28].d[0] = cur >= 0 ? threads[cur].ctx.r[28].d[0] : 0;
         call_guest(&irq_ctx, h->handler, cause, h->arg, 0);
@@ -217,6 +217,7 @@ static void raise_sif0(Ctx *c) {
 static void run_interrupts(void) {
     if (in_irq) return;
     rt_irq_pending = 0;
+    iop_kick(&irq_ctx);                             /* calls the IOP's modules queued for the EE */
     if (!timer_vblank && !iop_pending() && !dmac_pending) return;
     in_irq = 1;
     /* irq_ctx gets its own stack at the top of RAM, below the main thread's area */

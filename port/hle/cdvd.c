@@ -9,6 +9,7 @@
  * +2, the size at +10, flags at +25 (bit 1: directory), the name length at +32 and the name at +33.
  */
 #include <ctype.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,10 +29,14 @@ int cdvd_open(const char *path) {
     return 0;
 }
 
+static pthread_mutex_t iso_lock = PTHREAD_MUTEX_INITIALIZER;   /* the EE and the IOP's modules both read */
+
 static int read_sectors(u32 lsn, u32 count, u8 *out) {
     if (!iso) return -1;
-    if (fseeko(iso, (off_t)lsn * SECTOR, SEEK_SET)) return -1;
-    return fread(out, SECTOR, count, iso) == count ? 0 : -1;
+    pthread_mutex_lock(&iso_lock);
+    int ok = !fseeko(iso, (off_t)lsn * SECTOR, SEEK_SET) && fread(out, SECTOR, count, iso) == count;
+    pthread_mutex_unlock(&iso_lock);
+    return ok ? 0 : -1;
 }
 
 static u32 le32(const u8 *p) { return p[0] | p[1] << 8 | p[2] << 16 | (u32)p[3] << 24; }
@@ -82,6 +87,10 @@ static int iso_find(const char *path, u32 *lsn, u32 *size, u8 date[7]) {
     *size = dir_size;
     return 1;
 }
+
+/* For the IOP's modules (port/iop/lle): find a file, read sectors. */
+int cdvd_find(const char *path, u32 *lsn, u32 *size) { return iso_find(path, lsn, size, NULL); }
+int cdvd_read(u32 lsn, u32 count, u8 *out) { return read_sectors(lsn, count, out); }
 
 /* ------------------------------------------------------------------------------- libcdvd */
 

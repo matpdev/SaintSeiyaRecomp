@@ -147,6 +147,8 @@ static void voice_flush(Voice *v) {
     v->primed = 0;
 }
 
+void iop_lle_audio(float *out, int frames);   /* lle/iop_lib.c */
+
 static void mix(float *out, int frames) {
     memset(out, 0, (size_t)frames * 2 * sizeof *out);
     pthread_mutex_lock(&alock);
@@ -179,6 +181,7 @@ static void mix(float *out, int frames) {
     starved:;
     }
     pthread_mutex_unlock(&alock);
+    iop_lle_audio(out, frames);                     /* the sound driver's SPU2 (port/iop/lle) */
     for (int i = 0; i < frames * 2; i++) out[i] = out[i] > 1.0f ? 1.0f : out[i] < -1.0f ? -1.0f : out[i];
 }
 
@@ -222,7 +225,8 @@ static void dump_close(void) {
     SDL_UnlockAudioStream(stream);
 }
 
-static void audio_start(void) {
+/* Open the sound device (the first ADX voice, or the sound driver's SPU2 starting). */
+void cri_audio_start(void) {
     if (audio_state) return;
     audio_state = -1;
     const char *e = getenv("SSTHEH_AUDIO");
@@ -279,7 +283,7 @@ u32 srv_cri_adxi(Ctx *c, u32 fn, u8 *in, u32 in_size, u8 *out, u32 out_size) {
         if (v) { voice_flush(v); v->used = 0; }
     }
     pthread_mutex_unlock(&alock);
-    if (fn == 0x408) audio_start();
+    if (fn == 0x408) cri_audio_start();
     if (out_size == 4) {
         memcpy(out, &h, 4);
         return 4;
@@ -322,6 +326,7 @@ static void sjx_message(Ctx *c, const Dtx *d) {
         if (s->n == MAX_CHUNKS) { rt_log("adxi", "SJX %08X: too many chunks", iop_rd32(e + 4)); continue; }
         s->q[(s->head + s->n) % MAX_CHUNKS] = (Chunk){iop_rd32(e + 8), iop_rd32(e + 12)};
         s->n++;
+        if (rt_verbose > 2) rt_log("adxi", "SJX %08X (rmt %08X) +%u bytes at %08X, %u chunks", iop_rd32(e + 4), s->rmt, iop_rd32(e + 12), iop_rd32(e + 8), s->n);
     }
     if (audio_state != 1) drain_by_time();
     /* the reply: what was played, as free space */

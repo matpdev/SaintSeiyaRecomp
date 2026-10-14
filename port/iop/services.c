@@ -5,12 +5,15 @@
  */
 #include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "r5900.h"
 #include "runtime.h"
 #include "iop.h"
 #include "pad.h"
+
+int iop_lle_load(const char *path);
 
 static void dump_request(const char *name, u32 fn, const u8 *in, u32 in_size, u32 out_size) {
     char text[80];
@@ -42,7 +45,8 @@ static u32 srv_iopheap(Ctx *c, u32 fn, u8 *in, u32 in_size, u8 *out, u32 out_siz
     }
 }
 
-/* ---- 0x80000006: module loader. Modules are not run: their services are reimplemented here. */
+/* ---- 0x80000006: module loader. Modules are not run: their services are reimplemented here, except
+ * the game's sound driver (SSD.IRX, RSSD.IRX), which runs as it is (port/iop/lle). */
 static u32 srv_loadfile(Ctx *c, u32 fn, u8 *in, u32 in_size, u8 *out, u32 out_size) {
     (void)c;
     static int next_id = 1;
@@ -51,7 +55,13 @@ static u32 srv_loadfile(Ctx *c, u32 fn, u8 *in, u32 in_size, u8 *out, u32 out_si
         return 4;
     }
     if (fn == 0 || fn == 1) {                   /* LoadModule (file / from buffer) */
-        rt_log("iop", "LoadModule %s", (const char *)in + 8);
+        const char *path = (const char *)in + 8;
+        rt_log("iop", "LoadModule %s", path);
+        /* the game's sound driver runs as it is (port/iop/lle); SSTHEH_RSSD_HLE=1 keeps the stub */
+        static int hle = -1;
+        if (hle < 0) { const char *e = getenv("SSTHEH_RSSD_HLE"); hle = e && atoi(e); }
+        if (!hle && (strstr(path, "\\SSD.IRX") || strstr(path, "\\RSSD.IRX")) && iop_lle_load(path))
+            rt_log("iop", "%s could not run: the sound effects stay silent", path);
         wr(out, 0, next_id++);                  /* module id */
         wr(out, 4, 0);                          /* module's result */
         return 8;
@@ -105,6 +115,7 @@ void iop_services_init(void) {
     iop_register_server(0x80000400, "mcserv", srv_mc);
     iop_register_server(0x80000701, "libsd", srv_libsd);
     iop_register_server(0x00000900, "rssd", srv_rssd);
+    iop_set_server_buffer(0x00000900, 0x000E0000);   /* the stub's: room for 64 KB transfers (the module brings its own) */
     iop_register_server(0x80001300, "dbc", srv_dbc);
     iop_register_server(0x90000200, "cri-adxi", srv_cri_adxi);
     iop_register_server(0x80001400, "mc2", srv_mc2);
