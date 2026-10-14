@@ -59,6 +59,7 @@ extern int gpu_on;              /* the GPU renderer records instead of rasterisi
 /* gs.c. A frame is sealed when the game shows a new picture (the GS's thread, in order);
    the window's thread takes sealed frames (oldest first, NULL: none) and gives them back. */
 void gpu_seal_frame(void);
+u32 gpu_frames_sealed(void);                    /* pictures the game has finished so far */
 void gpu_vblank_tick(void);
 GpuFrame *gpu_next_frame(void);
 void gpu_release_frame(GpuFrame *f);

@@ -236,7 +236,15 @@ void vu_start(int id, int addr, u32 itop) {
     static u64 native_runs, partial_runs;
     if (done) { programs_run++; native_runs++; }
     else {
-        if (v->id == 1) partial_runs++;
+        static u32 by_pc[0x800];
+        if (v->id == 1) {
+            partial_runs++;
+            by_pc[(v->pc & 0x3FFF) / 8]++;
+            if (getenv("SSTHEH_VUJIT_MISS") && (partial_runs & 0x3FFF) == 0) {
+                for (int k = 0; k < 0x800; k++)
+                    if (by_pc[k] > 500) rt_log("vu", "interpreted from %03X: %u times", k * 8, by_pc[k]);
+            }
+        }
         run(v);
     }
     if (id == 1 && (programs_run & 0xFFFFF) == 0)

@@ -46,3 +46,15 @@ void hle_video_mode(Ctx *c) {
     if (pal < 0) pal = getenv("SSTHEH_50HZ") && atoi(getenv("SSTHEH_50HZ"));
     wr32(c, 0x0050022C, pal ? 2 : 1);
 }
+
+/* void set_frame_wait(u8 on) (0x00138B20): scenes set it to finish each frame by waiting for the
+ * next vertical blank, which makes the frame miss the vertical blank that starts the next one, so
+ * those scenes (menus, title, many 2D screens) run at half rate: 30 frames a second. The game's
+ * steps are timed by the vertical blanks that went by, so without the wait they run at the full
+ * rate at the same speed. SSTHEH_30FPS_SCENES=1: as on the disc. */
+void hle_set_frame_wait(Ctx *c) {
+    static int keep = -1;
+    if (keep < 0) keep = getenv("SSTHEH_30FPS_SCENES") && atoi(getenv("SSTHEH_30FPS_SCENES"));
+    u32 app = rd32(c, 0x005000A0);
+    wr8(c, app + 0x20, keep ? (u8)RW(4) : 0);
+}

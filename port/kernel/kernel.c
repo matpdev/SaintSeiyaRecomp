@@ -234,6 +234,15 @@ static void run_interrupts(void) {
     hsyncs += ntsc ? 262 : 312;
     if (intc_mask & (1 << 2)) run_handlers(intc, 2);       /* VBLANK_START */
     if (intc_mask & (1 << 3)) run_handlers(intc, 3);       /* VBLANK_END */
+    {   /* SSTHEH_WATCH=addr,from[,ptr_off]: log a word at every vertical blank from `from` on; with
+         * ptr_off, the word at (*addr + ptr_off) (tests) */
+        static u32 waddr = 1, wfrom, woff = ~0u;
+        if (waddr == 1) { const char *e = getenv("SSTHEH_WATCH"); waddr = 0; if (e) sscanf(e, "%x,%u,%x", &waddr, &wfrom, &woff); }
+        if (waddr && vblanks >= wfrom && vblanks < wfrom + 40) {
+            u32 a = woff == ~0u ? waddr : rd32(&irq_ctx, waddr) + woff;
+            fprintf(stderr, "[watch %5u] %08X = %08X\n", vblanks, a, rd32(&irq_ctx, a));
+        }
+    }
     for (int i = 0; i < MAX_ALARMS; i++) {
         Alarm *a = &alarms[i];
         if (a->used && hsyncs >= a->when) {

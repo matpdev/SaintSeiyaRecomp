@@ -554,6 +554,8 @@ static void seal_locked(void) {
     last_seal_vb = kernel_vblank_count();
 }
 
+u32 gpu_frames_sealed(void) { return rec_frame; }
+
 void gpu_seal_frame(void) {
     pthread_mutex_lock(&rec_lock);
     seal_locked();
