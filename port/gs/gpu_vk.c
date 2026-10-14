@@ -22,6 +22,8 @@
 #include "runtime.h"
 #include "gs.h"
 #include "gpu.h"
+
+int kernel_ntsc(void);
 #include "shaders.h"        /* generated from port/gs/shaders by configure.py */
 
 #define RT_SIZE 1024
@@ -515,6 +517,7 @@ static SDL_GPUTexture *displayed(float rect[4], int *pw, int *ph) {
     u32 magh = ((display >> 23) & 15) + 1, dw = ((display >> 32) & 0xFFF) + 1, dh = ((display >> 44) & 0x7FF) + 1;
     int w = (int)(dw / magh), h = (int)dh;
     if (w <= 0 || h <= 0 || w > 1024 || h > 1024) { w = 640; h = 448; }
+    if (kernel_ntsc() && h > 448) h = 448;          /* an NTSC screen shows 448 of the 512 lines asked for */
     *pw = w;
     *ph = h;
     rect[0] = (float)dbx / RT_SIZE;

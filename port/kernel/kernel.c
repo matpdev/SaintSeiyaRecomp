@@ -8,7 +8,8 @@
  * happen where the real kernel switches: in blocking calls, and when a higher-priority thread
  * becomes ready (preemption).
  *
- * Interrupts: a host timer raises `rt_irq_pending` at the PAL vertical blank rate (50 Hz). The
+ * Interrupts: a host timer raises `rt_irq_pending` at the vertical blank rate: PAL 50 Hz, or
+ * NTSC 59.94 Hz once the game sets an NTSC mode (SetGsCrt mode 2). The
  * recompiled code polls it at backward branches and in syscalls (rt_poll), so the handlers run at
  * a safe point, on a context of their own, on whichever host thread holds the CPU.
  */
@@ -67,7 +68,10 @@ static int in_irq;
 static u32 heap_end;
 static u32 user_syscalls[256];   /* installed with SetSyscall: guest functions run in "kernel mode" */
 static volatile u32 vblanks;
-static u64 hsyncs;               /* time base for alarms: PAL has 15625 lines per second */
+static u64 hsyncs;               /* time base for alarms: PAL has 15625 lines per second, NTSC 15734 */
+static volatile int ntsc;        /* the game set an NTSC mode: 59.94 Hz, 262 lines a field */
+
+int kernel_ntsc(void) { return ntsc; }
 
 volatile int rt_irq_pending;
 static volatile int timer_vblank;
@@ -227,7 +231,7 @@ static void run_interrupts(void) {
     timer_vblank = 0;
     vblanks++;
     pad_vblank(&irq_ctx);
-    hsyncs += 312;
+    hsyncs += ntsc ? 262 : 312;
     if (intc_mask & (1 << 2)) run_handlers(intc, 2);       /* VBLANK_START */
     if (intc_mask & (1 << 3)) run_handlers(intc, 3);       /* VBLANK_END */
     for (int i = 0; i < MAX_ALARMS; i++) {
@@ -254,7 +258,7 @@ static void *timer_main(void *arg) {
     struct timespec next;
     clock_gettime(CLOCK_MONOTONIC, &next);
     for (;;) {
-        next.tv_nsec += 20000000;            /* 50 Hz */
+        next.tv_nsec += ntsc ? 16683333 : 20000000;   /* 59.94 or 50 Hz */
         if (next.tv_nsec >= 1000000000) { next.tv_nsec -= 1000000000; next.tv_sec++; }
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
         timer_vblank = 1;
@@ -389,7 +393,11 @@ void rt_syscall(Ctx *c, u32 pc) {
     if (rt_verbose > 2)
         rt_log("sys", "thread %d: %s0x%X(%X, %X, %X) from %s", cur, isr ? "-" : "", k, a0, a1, a2, rt_name_of(pc));
     switch (k) {
-    case 0x02: rt_log("kernel", "SetGsCrt(interlace=%u, mode=%u, field=%u)", a0, a1, a2); gs_set_crt(a0, a1, a2); break;
+    case 0x02:
+        rt_log("kernel", "SetGsCrt(interlace=%u, mode=%u, field=%u)", a0, a1, a2);
+        if (a1 == 2 || a1 == 3) ntsc = a1 == 2;     /* 2 NTSC, 3 PAL */
+        gs_set_crt(a0, a1, a2);
+        break;
     case 0x04: rt_log("kernel", "Exit(%d)", a0); fflush(stderr); _exit(a0);
     case 0x10: case 0x12: {                                     /* AddIntcHandler / AddDmacHandler */
         Handler *list = k == 0x10 ? intc : dmac;

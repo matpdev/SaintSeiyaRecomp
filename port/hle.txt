@@ -16,3 +16,4 @@
 0x0024E8D0 hle_cri_print        # CRI debug printf (fmt, ...); prints at debug level 2 only
 # game
 0x002A78D0 hle_frame_lines      # scanlines this frame has used, for the time-sliced loaders: see port/hle/frame.c
+0x002BFA80 hle_video_mode       # sets the video mode (D_0050022C): 1 (NTSC, 60 Hz) instead of the region's 2 (PAL): see port/hle/frame.c
