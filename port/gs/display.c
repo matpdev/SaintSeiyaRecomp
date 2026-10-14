@@ -237,7 +237,7 @@ static void panel_update(void) {
     double game = total - gs - vu;
     if (game < 0) game = 0;
     static u32 rf0;
-    snprintf(panel.line[0], 96, "game %4.1f fps  shown %5.1f fps  vblank %4.1f Hz", frames / dt, (render_frames - rf0) / dt,
+    snprintf(panel.line[0], 96, "logic %4.1f fps  display %5.1f fps  vblank %4.1f Hz", frames / dt, (render_frames - rf0) / dt,
              (kernel_vblank_count() - vb0) / dt);
     rf0 = render_frames;
     snprintf(panel.line[1], 96, "CPU %3.0f%%  GS %3.0f%%  VU1 %3.0f%%  game %3.0f%%", 100 * total / dt,
