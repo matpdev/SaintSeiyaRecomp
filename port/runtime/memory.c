@@ -66,6 +66,7 @@ void rt_mmio_write(Ctx *c, u32 a, int size, u64 value) {
     if (size <= 4 && timer_write(p_, (u32)value)) return;
     if (!(*seen & 2)) { *seen |= 2; rt_log("mmio", "write%d %08X = %llX", size * 8, a, (unsigned long long)value); }
     memcpy(p, &value, size);
+    if (p_ == 0x12000070 || p_ == 0x12000090) dmac_gs_flip();   /* DISPFB1 / DISPFB2 */
 }
 
 void rt_mmio_read128(Ctx *c, u32 a, GPR *out) {

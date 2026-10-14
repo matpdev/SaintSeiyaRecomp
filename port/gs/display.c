@@ -5,6 +5,7 @@
  * The game runs on its own host threads; this side only reads GS memory, once per vertical blank.
  */
 #include <SDL3/SDL.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +29,7 @@ void vu_stats(void);
 extern u64 gs_prims;
 
 static u32 frame[1024 * 1024];
+static u32 render_frames;               /* pictures shown (GPU window), for the panel */
 
 /* --press 600:CROSS,700:START,800:DOWN:20: press a button at those times for 6 vertical blanks, or for
    the given number (tests) */
@@ -128,10 +130,46 @@ static void save_ppm(const char *path, const u32 *px, int w, int h) {
 static void panel_update(void);
 
 /* Headless: save the picture at each vertical blank listed (ascending), then exit. */
-/* GPU renderer: replay what the game drew since the last vertical blank */
+/* GPU renderer, headless: take the frames sealed since the last call, show the newest */
 static void gpu_vblank(void) {
     if (!gpu_on) return;
-    gpu_render(gpu_take_frame());
+    static GpuFrame *last;
+    gpu_vblank_tick();
+    GpuFrame *f;
+    while ((f = gpu_next_frame())) {
+        gpu_upload(f);
+        gpu_release_frame(last);
+        last = f;
+    }
+    if (last) gpu_render(last, NULL);
+}
+
+/* Frames shown between the game's: each draw found in both the previous frame (a) and the newest
+ * (b), with the same vertices and target, gets its positions moved a fraction t of the way from a
+ * to b (colours and texture coordinates are b's); draws that differ, or move too far (a cut), are
+ * b's. Returns the vertices to draw b with. */
+static GpuVertex *interpolate(const GpuFrame *a, const GpuFrame *b, float t) {
+    static GpuVertex *out;
+    static u32 cap;
+    if (b->nverts > cap) { cap = b->nverts * 2; out = realloc(out, cap * sizeof *out); }
+    memcpy(out, b->verts, b->nverts * sizeof *out);
+    for (u32 i = 0; i < b->ndraws && i < a->ndraws; i++) {
+        const GpuDraw *db = &b->draws[i], *da = &a->draws[i];
+        if (da->count != db->count || da->fbp != db->fbp || da->textured != db->textured || (da->tex < -1) != (db->tex < -1))
+            continue;
+        const GpuVertex *va = &a->verts[da->first], *vb = &b->verts[db->first];
+        int far = 0;
+        for (u32 k = 0; k < db->count && !far; k++)
+            far = fabsf(vb[k].x - va[k].x) > 80.0f || fabsf(vb[k].y - va[k].y) > 80.0f;
+        if (far) continue;
+        GpuVertex *o = &out[db->first];
+        for (u32 k = 0; k < db->count; k++) {
+            o[k].x = va[k].x + (vb[k].x - va[k].x) * t;
+            o[k].y = va[k].y + (vb[k].y - va[k].y) * t;
+            o[k].z = va[k].z + (vb[k].z - va[k].z) * t;
+        }
+    }
+    return out;
 }
 
 int display_shots(const int *at, int n) {
@@ -198,7 +236,10 @@ static void panel_update(void) {
     double gs = (perf.gs_ns - gs0) / 1e9, vu = (perf.vu_ns - vu0) / 1e9, total = cpu - cpu0;
     double game = total - gs - vu;
     if (game < 0) game = 0;
-    snprintf(panel.line[0], 96, "game %4.1f fps   vblank %4.1f Hz", frames / dt, (kernel_vblank_count() - vb0) / dt);
+    static u32 rf0;
+    snprintf(panel.line[0], 96, "game %4.1f fps  shown %5.1f fps  vblank %4.1f Hz", frames / dt, (render_frames - rf0) / dt,
+             (kernel_vblank_count() - vb0) / dt);
+    rf0 = render_frames;
     snprintf(panel.line[1], 96, "CPU %3.0f%%  GS %3.0f%%  VU1 %3.0f%%  game %3.0f%%", 100 * total / dt,
              100 * gs / dt, 100 * vu / dt, 100 * game / dt);
     snprintf(panel.line[2], 96, "%.0f primitives/s", (perf.prims - prims0) / dt);
@@ -213,7 +254,7 @@ static void panel_draw(SDL_Renderer *ren) {
     if (!panel_on || !panel.line[0][0]) return;
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(ren, 0, 0, 0, 170);
-    SDL_FRect bg = {4, 4, 8 * 46 + 8, 4 * 10 + 8};
+    SDL_FRect bg = {4, 4, 8 * 56 + 8, 4 * 10 + 8};
     SDL_RenderFillRect(ren, &bg);
     SDL_SetRenderDrawColor(ren, 255, 255, 0, 255);
     for (int i = 0; i < 4; i++) SDL_RenderDebugText(ren, 8, 8 + i * 10, panel.line[i]);
@@ -225,7 +266,7 @@ static void overlay_update(void) {
     static SDL_Renderer *sr;
     if (!panel_on) { gpu_set_overlay(NULL, 0, 0); return; }
     if (!surf) {
-        surf = SDL_CreateSurface(8 * 46 + 8, 4 * 10 + 8, SDL_PIXELFORMAT_ABGR8888);
+        surf = SDL_CreateSurface(8 * 56 + 8, 4 * 10 + 8, SDL_PIXELFORMAT_ABGR8888);
         sr = SDL_CreateSoftwareRenderer(surf);
     }
     SDL_SetRenderDrawColor(sr, 0, 0, 0, 170);
@@ -236,11 +277,17 @@ static void overlay_update(void) {
     gpu_set_overlay(surf->pixels, surf->w, surf->h);
 }
 
-/* Window with the GPU renderer: every vertical blank, replay the recorded draws and present. */
+/* Window with the GPU renderer: as often as the screen takes pictures (or as fast as possible
+ * with SSTHEH_VSYNC=0), show the game's newest frame, moved part of the way from the one before
+ * it by the time since it came (SSTHEH_INTERP=0: the newest frame as it is). */
 static int display_window_gpu(void) {
     SDL_Window *win = SDL_CreateWindow("Saint Seiya: The Hades", 1280, 960, SDL_WINDOW_RESIZABLE);
     if (!win || gpu_init(win)) return -1;
-    u32 shown = 0;
+    int interp = !(getenv("SSTHEH_INTERP") && !atoi(getenv("SSTHEH_INTERP")));
+    GpuFrame *fa = NULL, *fb = NULL;    /* the frame before, the newest */
+    u64 tb = 0, period = 20000000;      /* when the newest came; time between frames (ns) */
+    u32 last_vb = 0;
+    int final_shown = 0;
     for (;;) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
@@ -250,15 +297,39 @@ static int display_window_gpu(void) {
         }
         pad_buttons[0] = keyboard() | gamepad_buttons() | scripted(kernel_vblank_count());
         u32 vb = kernel_vblank_count();
-        if (vb == shown) { SDL_Delay(1); continue; }
-        shown = vb;
-        gpu_render(gpu_take_frame());
-        u64 before = perf.prims;
-        panel_update();
-        (void)before;
-        static u32 last_overlay;
-        if (vb - last_overlay >= 25) { last_overlay = vb; overlay_update(); }
+        if (vb != last_vb) {
+            last_vb = vb;
+            gpu_vblank_tick();
+            panel_update();
+            static u32 last_overlay;
+            if (vb - last_overlay >= 25) { last_overlay = vb; overlay_update(); }
+        }
+        GpuFrame *f;
+        u64 now = SDL_GetTicksNS();
+        while ((f = gpu_next_frame())) {
+            gpu_upload(f);
+            if (fb) {
+                u64 dt = now - tb;
+                if (dt < 5000000) dt = 5000000;
+                if (dt > 100000000) dt = 100000000;
+                period = (period * 3 + dt) / 4;
+            }
+            gpu_release_frame(fa);
+            fa = fb;
+            fb = f;
+            tb = now;
+            final_shown = 0;
+        }
+        if (!fb) { SDL_Delay(1); continue; }
+        float t = interp && fa ? (float)(now - tb) / (float)period : 1.0f;
+        if (t >= 1.0f) {
+            if (final_shown) { SDL_Delay(1); continue; }
+            t = 1.0f;
+            final_shown = 1;
+        }
+        gpu_render(fb, t < 1.0f ? interpolate(fa, fb, t) : NULL);
         gpu_present();
+        render_frames++;
     }
 }
 

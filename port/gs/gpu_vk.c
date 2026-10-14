@@ -138,6 +138,13 @@ int gpu_init(void *sdl_window) {
                       SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
     present_pipe = simple_pipe(swap_fmt, 0);
     overlay_pipe = simple_pipe(swap_fmt, 1);
+    /* SSTHEH_VSYNC=0: don't wait for the screen (mailbox, or immediate if that's all there is) */
+    if (win && getenv("SSTHEH_VSYNC") && !atoi(getenv("SSTHEH_VSYNC"))) {
+        SDL_GPUPresentMode m = SDL_WindowSupportsGPUPresentMode(dev, win, SDL_GPU_PRESENTMODE_MAILBOX)
+                                   ? SDL_GPU_PRESENTMODE_MAILBOX : SDL_GPU_PRESENTMODE_IMMEDIATE;
+        if (!SDL_SetGPUSwapchainParameters(dev, win, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, m))
+            rt_log("gpu", "present mode: %s", SDL_GetError());
+    }
     return 0;
 }
 
@@ -310,7 +317,7 @@ static u64 up_bytes, up_count;
 static SDL_GPUTransferBuffer *txfer;        /* texture uploads */
 static u32 txfer_size;              /* texture uploads since the last stats line */
 
-static void upload_frame(SDL_GPUCommandBuffer *cmd, GpuFrame *f) {
+static void upload_verts(SDL_GPUCommandBuffer *cmd, GpuFrame *f, const GpuVertex *verts) {
     SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
     u32 vbytes = f->nverts * sizeof(GpuVertex);
     if (vbytes) {
@@ -327,12 +334,20 @@ static void upload_frame(SDL_GPUCommandBuffer *cmd, GpuFrame *f) {
             vxfer = SDL_CreateGPUTransferBuffer(dev, &ti);
         }
         void *m = SDL_MapGPUTransferBuffer(dev, vxfer, true);
-        memcpy(m, f->verts, vbytes);
+        memcpy(m, verts ? verts : f->verts, vbytes);
         SDL_UnmapGPUTransferBuffer(dev, vxfer);
         SDL_GPUTransferBufferLocation src = {vxfer, 0};
         SDL_GPUBufferRegion dst = {vbuf, 0, vbytes};
         SDL_UploadToGPUBuffer(cp, &src, &dst, true);
     }
+    SDL_EndGPUCopyPass(cp);
+}
+
+/* A new frame's textures: the ones it no longer needs released, the new ones uploaded. */
+void gpu_upload(GpuFrame *f) {
+    if (!dev || !f) return;
+    SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(dev);
+    SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
     for (u32 i = 0; i < f->nfrees; i++) {
         Tex *t = tex_slot(f->frees[i]);
         if (t->tex) SDL_ReleaseGPUTexture(dev, t->tex);
@@ -375,10 +390,16 @@ static void upload_frame(SDL_GPUCommandBuffer *cmd, GpuFrame *f) {
     }
     if (map) SDL_UnmapGPUTransferBuffer(dev, txfer);
     SDL_EndGPUCopyPass(cp);
+    SDL_SubmitGPUCommandBuffer(cmd);
 }
 
-void gpu_render(GpuFrame *f) {
+static u64 shown_priv[5];       /* the displayed frame's PMODE, DISPFB1, DISPLAY1, DISPFB2, DISPLAY2 */
+static int have_shown_priv;
+
+void gpu_render(GpuFrame *f, const GpuVertex *verts) {
     if (!dev || !f || !f->ndraws) return;
+    memcpy(shown_priv, f->priv, sizeof shown_priv);
+    have_shown_priv = 1;
     frame_no++;
     if (getenv("SSTHEH_GPU_DEBUG") && frame_no % 100 == 1) {
         GpuDraw *d = &f->draws[0];
@@ -394,7 +415,7 @@ void gpu_render(GpuFrame *f) {
         up_bytes = up_count = 0;
     }
     SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(dev);
-    upload_frame(cmd, f);
+    upload_verts(cmd, f, verts);
     SDL_GPURenderPass *rp = NULL;
     u32 cur_fbp = ~0u, cur_zbp = ~0u;
     SDL_GPUTexture *cur_color = NULL;
@@ -474,9 +495,10 @@ void gpu_render(GpuFrame *f) {
 
 /* The displayed rectangle: the enabled circuit's DISPFB (FBP, DBX, DBY) and DISPLAY (size). */
 static SDL_GPUTexture *displayed(float rect[4], int *pw, int *ph) {
-    u64 pmode = gs_priv_read(0x0000);
+    u64 pmode = have_shown_priv ? shown_priv[0] : gs_priv_read(0x0000);
     int circuit2 = (pmode & 2) != 0;
-    u64 dispfb = gs_priv_read(circuit2 ? 0x0090 : 0x0070), display = gs_priv_read(circuit2 ? 0x00A0 : 0x0080);
+    u64 dispfb = have_shown_priv ? shown_priv[circuit2 ? 3 : 1] : gs_priv_read(circuit2 ? 0x0090 : 0x0070);
+    u64 display = have_shown_priv ? shown_priv[circuit2 ? 4 : 2] : gs_priv_read(circuit2 ? 0x00A0 : 0x0080);
     u32 fbp = dispfb & 0x1FF, dbx = (dispfb >> 32) & 0x7FF, dby = (dispfb >> 43) & 0x7FF;
     u32 magh = ((display >> 23) & 15) + 1, dw = ((display >> 32) & 0xFFF) + 1, dh = ((display >> 44) & 0x7FF) + 1;
     int w = (int)(dw / magh), h = (int)dh;

@@ -513,8 +513,16 @@ int gpu_on;
 static u32 page_gen[512];                  /* bumped when anything writes into that 8 KB page */
 static u8 rt_fbp[512];                     /* frame buffers drawn to (FBP), for render-to-texture */
 static pthread_mutex_t rec_lock = PTHREAD_MUTEX_INITIALIZER;
-static GpuFrame frames[2], *rec = &frames[0];
-static u32 rec_frame = 1;                  /* frames handed to the GPU side */
+/* Frames: the one being recorded (rec), complete ones waiting for the window (sealed, oldest
+ * first), and free ones. A frame is sealed when the game shows a new picture (DISPFB written:
+ * gpu_seal_frame, in the order of the GS's work); if nothing waits for it, it keeps recording
+ * (the next frame then holds two), so no texture upload is ever lost. */
+#define NFRAMES 8
+static GpuFrame frames[NFRAMES], *rec = &frames[0];
+static GpuFrame *sealed[NFRAMES], *free_frames[NFRAMES];
+static int nsealed, nfree;
+static u32 rec_frame = 1;                  /* frames sealed */
+static u32 last_seal_vb;
 
 static void pages_written(u32 bp_blocks, u32 blocks) {
     for (u32 pg = bp_blocks / 32; pg <= (bp_blocks + blocks) / 32 && pg < bp_blocks / 32 + 512; pg++) page_gen[pg & 511]++;
@@ -523,17 +531,61 @@ static void pages_written(u32 bp_blocks, u32 blocks) {
 #define GROW(arr, n, cap, type) do { if ((n) >= (cap)) { (cap) = (cap) ? (cap) * 2 : 1024; \
     (arr) = (type *)realloc((arr), (size_t)(cap) * sizeof(type)); } } while (0)
 
-GpuFrame *gpu_take_frame(void) {
-    static GpuFrame *given;
-    pthread_mutex_lock(&rec_lock);
-    GpuFrame *done = rec;
-    rec = done == &frames[0] ? &frames[1] : &frames[0];
-    for (u32 i = 0; i < rec->nuploads; i++) free(rec->uploads[i].px);
+static void frames_init(void) {
+    static int done;
+    if (done) return;
+    done = 1;
+    for (int i = 1; i < NFRAMES; i++) free_frames[nfree++] = &frames[i];
+}
+
+u64 gs_priv_read(u32 off);
+u32 kernel_vblank_count(void);
+
+static void seal_locked(void) {
+    frames_init();
+    if (!rec->ndraws || nsealed == NFRAMES || !nfree) return;
+    static const u32 regs[5] = {0x0000, 0x0070, 0x0080, 0x0090, 0x00A0};
+    for (int k = 0; k < 5; k++) rec->priv[k] = gs_priv_read(regs[k]);
+    rec->seq = rec_frame;
+    sealed[nsealed++] = rec;
+    rec = free_frames[--nfree];
     rec->ndraws = rec->nverts = rec->nuploads = rec->nfrees = 0;
     rec_frame++;
+    last_seal_vb = kernel_vblank_count();
+}
+
+void gpu_seal_frame(void) {
+    pthread_mutex_lock(&rec_lock);
+    seal_locked();
     pthread_mutex_unlock(&rec_lock);
-    given = done;
-    return given;
+}
+
+/* Window's thread, at every vertical blank: a game that shows pictures without writing DISPFB
+ * (one buffer) still gets its frames out, a few vertical blanks late. */
+void gpu_vblank_tick(void) {
+    pthread_mutex_lock(&rec_lock);
+    if (rec->ndraws && kernel_vblank_count() - last_seal_vb >= 3) seal_locked();
+    pthread_mutex_unlock(&rec_lock);
+}
+
+GpuFrame *gpu_next_frame(void) {
+    pthread_mutex_lock(&rec_lock);
+    GpuFrame *f = NULL;
+    if (nsealed) {
+        f = sealed[0];
+        memmove(sealed, sealed + 1, (size_t)--nsealed * sizeof *sealed);
+    }
+    pthread_mutex_unlock(&rec_lock);
+    return f;
+}
+
+void gpu_release_frame(GpuFrame *f) {
+    if (!f) return;
+    pthread_mutex_lock(&rec_lock);
+    for (u32 i = 0; i < f->nuploads; i++) free(f->uploads[i].px);
+    f->ndraws = f->nverts = f->nuploads = f->nfrees = 0;
+    free_frames[nfree++] = f;
+    pthread_mutex_unlock(&rec_lock);
 }
 
 /* ---- texture cache

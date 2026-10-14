@@ -26,6 +26,7 @@
 #include "runtime.h"
 #include "kernel.h"
 #include "gs.h"
+#include "gpu.h"
 
 static const u32 base[10] = {0x10008000, 0x10009000, 0x1000A000, 0x1000B000, 0x1000B400,
                              0x1000C000, 0x1000C400, 0x1000C800, 0x1000D000, 0x1000D400};
@@ -167,6 +168,8 @@ static pthread_cond_t qcond = PTHREAD_COND_INITIALIZER, qdone = PTHREAD_COND_INI
 static int queue[64], qhead, qcount;
 static volatile int outstanding;     /* queued or running */
 
+#define JOB_FLIP 99             /* not a channel: seal the recorded frame (gpu_seal_frame) */
+
 static void *gs_thread(void *arg) {
     (void)arg;
     for (;;) {
@@ -174,6 +177,15 @@ static void *gs_thread(void *arg) {
         while (!qcount) pthread_cond_wait(&qcond, &qlock);
         int ch = queue[qhead];
         pthread_mutex_unlock(&qlock);
+        if (ch == JOB_FLIP) {
+            gpu_seal_frame();
+            pthread_mutex_lock(&qlock);
+            qhead = (qhead + 1) % 64;
+            qcount--;
+            pthread_cond_broadcast(&qdone);
+            pthread_mutex_unlock(&qlock);
+            continue;
+        }
         transfer(NULL, ch);
         pthread_mutex_lock(&qlock);
         qhead = (qhead + 1) % 64;
@@ -188,14 +200,37 @@ static void *gs_thread(void *arg) {
 
 int dmac_gs_busy(void) { return __atomic_load_n(&outstanding, __ATOMIC_ACQUIRE) != 0; }
 
-static void queue_transfer(int ch) {
-    __atomic_add_fetch(&outstanding, 1, __ATOMIC_ACQ_REL);
+static void queue_job(int ch) {
     pthread_mutex_lock(&qlock);
     while (qcount == 64) pthread_cond_wait(&qdone, &qlock);
     queue[(qhead + qcount) % 64] = ch;
     qcount++;
     pthread_cond_signal(&qcond);
     pthread_mutex_unlock(&qlock);
+}
+
+static void queue_transfer(int ch) {
+    __atomic_add_fetch(&outstanding, 1, __ATOMIC_ACQ_REL);
+    queue_job(ch);
+}
+
+static void gs_thread_start(void) {
+    if (async >= 0) return;
+    const char *e = getenv("SSTHEH_GSTHREAD");
+    async = !(e && !atoi(e));
+    if (async) {
+        pthread_t t;
+        pthread_create(&t, NULL, gs_thread, NULL);
+        pthread_detach(t);
+    }
+}
+
+/* The game shows a new picture (DISPFB written): seal the frame after what the GS has queued. */
+void dmac_gs_flip(void) {
+    if (!gpu_on) return;
+    gs_thread_start();
+    if (async) queue_job(JOB_FLIP);
+    else gpu_seal_frame();
 }
 
 static void start(Ctx *c, int ch) {
@@ -211,15 +246,7 @@ static void start(Ctx *c, int ch) {
         return;
     }
     (void)mod;
-    if (async < 0) {
-        const char *e = getenv("SSTHEH_GSTHREAD");
-        async = !(e && !atoi(e));
-        if (async) {
-            pthread_t t;
-            pthread_create(&t, NULL, gs_thread, NULL);
-            pthread_detach(t);
-        }
-    }
+    gs_thread_start();
     if (async && (ch == 1 || ch == 2)) { queue_transfer(ch); return; }
     transfer(c, ch);
     finish(ch);

@@ -50,18 +50,23 @@ typedef struct {
     u32 nuploads, cap_uploads;
     u32 *frees;                 /* textures no longer used (released before the uploads) */
     u32 nfrees, cap_frees;
-    u64 dispfb, display, pmode; /* what the CRT shows when the frame was handed over */
+    u64 priv[5];                /* PMODE, DISPFB1, DISPLAY1, DISPFB2, DISPLAY2 when it was sealed */
+    u32 seq;                    /* sealed frames are numbered */
 } GpuFrame;
 
 extern int gpu_on;              /* the GPU renderer records instead of rasterising */
 
-/* window's thread: the draws recorded since the last call (gs.c); the frame stays valid until the
-   next call */
-GpuFrame *gpu_take_frame(void);
+/* gs.c. A frame is sealed when the game shows a new picture (the GS's thread, in order);
+   the window's thread takes sealed frames (oldest first, NULL: none) and gives them back. */
+void gpu_seal_frame(void);
+void gpu_vblank_tick(void);
+GpuFrame *gpu_next_frame(void);
+void gpu_release_frame(GpuFrame *f);
 u32 gpu_tex_stats(u64 *bytes);                   /* textures alive and their decoded bytes */
 
 /* window's thread (gpu_vk.c) */
 int gpu_init(void *sdl_window);                  /* window NULL: off screen (--shot) */
-void gpu_render(GpuFrame *f);                    /* replay a frame into the render targets */
+void gpu_upload(GpuFrame *f);                    /* a new frame's textures (once per frame) */
+void gpu_render(GpuFrame *f, const GpuVertex *verts);   /* replay a frame (verts: NULL, or moved copies) */
 void gpu_present(void);                          /* show the displayed buffer in the window */
 int gpu_read_display(u32 *out, int max_w, int max_h, int *w, int *h);   /* for --shot */
