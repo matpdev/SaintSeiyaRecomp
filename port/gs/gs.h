@@ -4,6 +4,7 @@
 
 /* dmac.c: registers 0x10008000..0x1000EFFF */
 u32 dmac_read(u32 addr);
+int dmac_gs_busy(void);       /* VIF1 / GIF transfers still running on their thread */
 int dmac_write(Ctx *c, u32 addr, u32 value);      /* 0 if not a DMAC register */
 
 /* destinations of DMA data */

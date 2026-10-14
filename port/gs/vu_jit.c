@@ -140,23 +140,38 @@ static char *generate(const u8 *code, u32 entry, const u8 *in) {
     put(&s, "    int ending = 0, pend = 0, taken = 0;\n    u32 ptarget = 0, target = 0, npc;\n    long guard = 0;\n    UpperOut uo;\n");
     put(&s, "    (void)taken; (void)target; (void)guard;\n");
     put(&s, "    goto *L2[(v->pc & 0x3FFF) >> 3];\nout:\n    return 1;\n");
+    /* what the program needs: flag reads (FCxx, FMxx, FSxx), Q/P latencies (DIV, SQRT, RSQRT, EFU) */
+    int flag_reads = 0, qp = 0;
+    for (u32 p = 0; p < NPAIRS; p++) {
+        if (!in[p]) continue;
+        u32 lo = rd_word(code, p, 0), hi = rd_word(code, p, 1);
+        if (hi >> 31) continue;
+        u32 op = lo >> 25;
+        if (op >= 0x10 && op <= 0x1C) flag_reads = 1;
+        if (op == 0x40 && (lo & 0x3F) >= 0x3C) {
+            u32 s2 = ((lo >> 6) & 0x1F) << 2 | (lo & 3);
+            if ((s2 >= 0x38 && s2 <= 0x3B) || (s2 >= 0x70 && s2 <= 0x7E)) qp = 1;
+        }
+    }
     for (u32 p = 0; p < NPAIRS; p++) {
         if (!in[p]) continue;
         u32 lo = rd_word(code, p, 0), hi = rd_word(code, p, 1), next = ((p + 1) % NPAIRS) * 8;
         Dec d;
         vu_decode(&d, lo, hi);
         put(&s, "p%u: {\n", p);
-        put(&s, "    if (v->q_wait && --v->q_wait == 0) v->q = v->q_next;\n");
-        put(&s, "    if (v->p_wait && --v->p_wait == 0) v->p = v->p_next;\n");
-        put(&s, "    { static const Dec d = {%u, %u, %u, %u, %u, %u, %u, %u, %u, %u, %u, %u, %u, 1, 0x%08Xu, 0x%08Xu}; upper(v, &d, &uo); }\n",
-            d.kind, d.op, d.bsrc, d.bc, d.dest, d.fs, d.ft, d.fd, d.to_acc, d.sc, d.ibit, d.ebit, d.lnop, lo, hi);
+        if (qp) {
+            put(&s, "    if (v->q_wait && --v->q_wait == 0) v->q = v->q_next;\n");
+            put(&s, "    if (v->p_wait && --v->p_wait == 0) v->p = v->p_next;\n");
+        }
+        put(&s, "    { static const Dec d = {%u, %u, %u, %u, %u, %u, %u, %u, %u, %u, %u, %u, %u, 1, 0x%08Xu, 0x%08Xu}; upper_f(v, &d, &uo, %d); }\n",
+            d.kind, d.op, d.bsrc, d.bc, d.dest, d.fs, d.ft, d.fd, d.to_acc, d.sc, d.ibit, d.ebit, d.lnop, lo, hi, flag_reads);
         int br = 0;
         if (d.ibit) put(&s, "    { u32 x = 0x%08Xu; memcpy(&v->i, &x, 4); }\n", lo);
         else if (!d.lnop) {
             br = is_branch(lo) || is_jump(lo);
             put(&s, "    %slower(v, 0x%08Xu, %uu, &target);\n", br ? "taken = " : "", lo, p * 8);
         }
-        put(&s, "    commit_upper(&uo);\n    flags_advance(v);\n");
+        put(&s, "    commit_upper(&uo);\n%s", flag_reads ? "    flags_advance(v);\n" : "");
         put(&s, "    npc = %uu;\n    if (pend) { pend = 0; npc = ptarget & 0x3FFF; }\n", next);
         if (br) put(&s, "    if (taken) { pend = 1; ptarget = target; }\n");
         put(&s, "    if (ending) { v->pc = npc; return 0; }\n");

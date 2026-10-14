@@ -42,8 +42,11 @@ u32 rt_mmio_read(Ctx *c, u32 a, int size) {
     u32 p_ = a & 0x1FFFFFFF;
     if (p_ >= 0x10008000 && p_ < 0x1000F000) return dmac_read(p_);
     { u32 tv; if (timer_read(p_, &tv)) return tv; }
-    /* VIF0/VIF1/GIF status: transfers complete at once, so the paths are always idle */
-    if (p_ == 0x10003800 || p_ == 0x10003C00 || p_ == 0x10003020) return 0;
+    /* VIF0/VIF1/GIF status: idle, unless VIF1 / GIF transfers are still going on their thread
+     * (VIF1_STAT: FQC 24-28; GIF_STAT: OPH 9, APATH 10-11, FQC 24-28) */
+    if (p_ == 0x10003800) return 0;
+    if (p_ == 0x10003C00) return dmac_gs_busy() ? 0x1F000000u : 0;
+    if (p_ == 0x10003020) return dmac_gs_busy() ? 0x1F000E00u : 0;
     /* registers whose reads must not just echo the last write */
     if (p_ == 0x12001000) {               /* GS CSR: report VSync/FINISH events as happened */
         return 0x0000000C | (kernel_vblank_count() & 1 ? 0x2000 : 0);

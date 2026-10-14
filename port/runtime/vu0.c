@@ -11,6 +11,8 @@
 #include "r5900.h"
 #include "runtime.h"
 
+int dmac_gs_busy(void);   /* dmac.c */
+
 #define FIELD(raw, lo, n) (((raw) >> (lo)) & ((1u << (n)) - 1))
 
 static inline f32 vclamp(f32 x) { return fpu(x); }
@@ -173,7 +175,7 @@ u32 vu0_cfc2(Ctx *c, int reg) {
     case 17: return c->vu0_mac;
     case 18: return c->vu0_clip;
     case 22: { u32 u; memcpy(&u, &c->q, 4); return u; }
-    case 29: return 0;          /* VPU-STAT: VU0/VU1 idle */
+    case 29: return dmac_gs_busy() ? 0x100 : 0;   /* VPU-STAT: VU1 busy (VBS1) while its transfers run */
     }
     return 0;
 }

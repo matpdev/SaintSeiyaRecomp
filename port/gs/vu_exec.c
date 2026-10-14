@@ -229,6 +229,10 @@ void vu_start(int id, int addr, u32 itop) {
     _mm_setcsr(csr | 0x8040);                        /* FTZ | DAZ, as in run() */
     int done = vu_jit_run(v);
     _mm_setcsr(csr);
+    if (done) {                                      /* as at the end of run() */
+        if (v->q_wait) { v->q = v->q_next; v->q_wait = 0; }
+        if (v->p_wait) { v->p = v->p_next; v->p_wait = 0; }
+    }
     static u64 native_runs, partial_runs;
     if (done) { programs_run++; native_runs++; }
     else {

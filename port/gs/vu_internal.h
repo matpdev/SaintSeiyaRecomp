@@ -111,7 +111,8 @@ static inline __attribute__((always_inline)) void flags_advance(Vu *v) {
 
 typedef struct { float *dst; __m128 val; int dest; } UpperOut;   /* dst NULL: nothing to write */
 
-static inline __attribute__((always_inline)) void upper(Vu *v, const Dec *d, UpperOut *o) {
+/* flags 0: the program never reads the MAC/status flags, don't compute them (translated programs) */
+static inline __attribute__((always_inline)) void upper_f(Vu *v, const Dec *d, UpperOut *o, int flags) {
     o->dst = NULL;
     o->dest = d->dest;
     switch (d->kind) {
@@ -134,7 +135,7 @@ static inline __attribute__((always_inline)) void upper(Vu *v, const Dec *d, Upp
         }
         if (d->op < 5) {
             r = vclamp(r);
-            set_flags(v, d->dest, r);
+            if (flags) set_flags(v, d->dest, r);
         }
         o->val = r;
         o->dst = d->to_acc ? v->acc.f : d->fd ? v->vf[d->fd].f : NULL;
@@ -146,7 +147,7 @@ static inline __attribute__((always_inline)) void upper(Vu *v, const Dec *d, Upp
             ? _mm_setr_ps(acc[0] - a[1] * t[2], acc[1] - a[2] * t[0], acc[2] - a[0] * t[1], 0)
             : _mm_setr_ps(a[1] * t[2], a[2] * t[0], a[0] * t[1], 0);
         r = vclamp(r);
-        set_flags(v, 0xE, r);
+        if (flags) set_flags(v, 0xE, r);
         o->val = r;
         o->dest = 0xE;
         o->dst = d->kind == UK_OPMULA ? v->acc.f : d->fd ? v->vf[d->fd].f : NULL;
@@ -189,6 +190,8 @@ static inline __attribute__((always_inline)) void upper(Vu *v, const Dec *d, Upp
     default: return;
     }
 }
+
+static inline __attribute__((always_inline)) void upper(Vu *v, const Dec *d, UpperOut *o) { upper_f(v, d, o, 1); }
 
 static inline __m128 vu_dest_mask(int dest) {
     return _mm_castsi128_ps(_mm_setr_epi32(-((dest >> 3) & 1), -((dest >> 2) & 1), -((dest >> 1) & 1), -(dest & 1)));

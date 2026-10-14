@@ -199,9 +199,9 @@ static void run_handlers(Handler *list, int cause) {
 
 static volatile u32 dmac_pending;
 
-void kernel_raise_dmac(int ch) {
-    dmac_pending |= 1u << ch;
-    rt_irq_pending = 1;
+void kernel_raise_dmac(int ch) {                    /* also from the VIF1 / GIF thread */
+    __atomic_or_fetch(&dmac_pending, 1u << ch, __ATOMIC_RELEASE);
+    __atomic_store_n(&rt_irq_pending, 1, __ATOMIC_RELEASE);
 }
 
 static void raise_sif0(Ctx *c) {
@@ -220,7 +220,7 @@ static void run_interrupts(void) {
     if (iop_pending()) iop_deliver(&irq_ctx, raise_sif0);
     while (dmac_pending) {
         int ch = __builtin_ctz(dmac_pending);
-        dmac_pending &= ~(1u << ch);
+        __atomic_and_fetch(&dmac_pending, ~(1u << ch), __ATOMIC_ACQ_REL);
         if (ch != 5 && (dmac_mask & (1u << ch))) run_handlers(dmac, ch);
     }
     if (!timer_vblank) { in_irq = 0; return; }

@@ -11,7 +11,14 @@
  * TIE 7, STR 8, TAG 16-31.
  * Source-chain tag (one quadword): QWC 0-15, PCE 26-27, ID 28-30, IRQ 31, ADDR 32-62 (bit 63: SPR).
  * IDs: 0 refe, 1 cnt, 2 next, 3 ref, 4 refs, 5 call, 6 ret, 7 end.
+ *
+ * VIF1 (1) and GIF (2) transfers run on their own thread, as the VU1 and the GS run beside the EE
+ * on the hardware: starting one queues it and leaves STR set; the thread carries them out in order,
+ * then clears STR, sets D_STAT and raises the interrupt. While any is pending, VIF1_STAT, GIF_STAT
+ * and VPU-STAT read busy (dmac_gs_busy). SSTHEH_GSTHREAD=0: everything at once on the EE's thread.
  */
+#include <pthread.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -24,7 +31,7 @@ static const u32 base[10] = {0x10008000, 0x10009000, 0x1000A000, 0x1000B000, 0x1
                              0x1000C000, 0x1000C400, 0x1000C800, 0x1000D000, 0x1000D400};
 static const char *const names[10] = {"VIF0", "VIF1", "GIF", "fromIPU", "toIPU", "SIF0", "SIF1", "SIF2",
                                       "fromSPR", "toSPR"};
-static u32 d_stat;              /* 0-9 channel done, 16-25 interrupt mask */
+static volatile u32 d_stat;     /* 0-9 channel done, 16-25 interrupt mask */
 static u32 reg[10][0x100 / 4];  /* each channel's registers, by offset / 4 */
 
 int dmac_channel_of(u32 a) {
@@ -138,27 +145,84 @@ static void spr_transfer(Ctx *c, int ch) {
     r[0x80 / 4] = sadr;
 }
 
+static void finish(int ch) {
+    u32 *r = reg[ch];
+    r[0x20 / 4] = 0;
+    __atomic_and_fetch(&r[0], ~0x100u, __ATOMIC_RELEASE);
+    __atomic_or_fetch(&d_stat, 1u << ch, __ATOMIC_RELEASE);
+    kernel_raise_dmac(ch);                          /* the kernel runs the handlers enabled for it */
+}
+
+static void transfer(Ctx *c, int ch) {
+    u32 *r = reg[ch];
+    int mod = (r[0] >> 2) & 3;
+    if (mod == 1) run_chain(c, ch);
+    else deliver(c, ch, mem(r[0x10 / 4], r[0x10 / 4] >> 31), r[0x20 / 4]);
+}
+
+/* ---- the VIF1 / GIF thread */
+static int async = -1;
+static pthread_mutex_t qlock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t qcond = PTHREAD_COND_INITIALIZER, qdone = PTHREAD_COND_INITIALIZER;
+static int queue[64], qhead, qcount;
+static volatile int outstanding;     /* queued or running */
+
+static void *gs_thread(void *arg) {
+    (void)arg;
+    for (;;) {
+        pthread_mutex_lock(&qlock);
+        while (!qcount) pthread_cond_wait(&qcond, &qlock);
+        int ch = queue[qhead];
+        pthread_mutex_unlock(&qlock);
+        transfer(NULL, ch);
+        pthread_mutex_lock(&qlock);
+        qhead = (qhead + 1) % 64;
+        qcount--;
+        pthread_cond_broadcast(&qdone);
+        pthread_mutex_unlock(&qlock);
+        finish(ch);
+        __atomic_sub_fetch(&outstanding, 1, __ATOMIC_RELEASE);
+    }
+    return NULL;
+}
+
+int dmac_gs_busy(void) { return __atomic_load_n(&outstanding, __ATOMIC_ACQUIRE) != 0; }
+
+static void queue_transfer(int ch) {
+    __atomic_add_fetch(&outstanding, 1, __ATOMIC_ACQ_REL);
+    pthread_mutex_lock(&qlock);
+    while (qcount == 64) pthread_cond_wait(&qdone, &qlock);
+    queue[(qhead + qcount) % 64] = ch;
+    qcount++;
+    pthread_cond_signal(&qcond);
+    pthread_mutex_unlock(&qlock);
+}
+
 static void start(Ctx *c, int ch) {
     u32 *r = reg[ch];
     int mod = (r[0] >> 2) & 3;
     if (ch == 8 || ch == 9) {
         spr_transfer(c, ch);
-        r[0x20 / 4] = 0;
-        r[0] &= ~0x100u;
-        d_stat |= 1u << ch;
-        kernel_raise_dmac(ch);
+        finish(ch);
         return;
     }
     if (ch == 5 || ch == 6 || ch == 7) {            /* SIF: handled by the SIF syscalls */
         r[0] &= ~0x100u;
         return;
     }
-    if (mod == 1) run_chain(c, ch);
-    else deliver(c, ch, mem(r[0x10 / 4], r[0x10 / 4] >> 31), r[0x20 / 4]);
-    r[0x20 / 4] = 0;
-    r[0] &= ~0x100u;
-    d_stat |= 1u << ch;
-    kernel_raise_dmac(ch);                          /* the kernel runs the handlers enabled for it */
+    (void)mod;
+    if (async < 0) {
+        const char *e = getenv("SSTHEH_GSTHREAD");
+        async = !(e && !atoi(e));
+        if (async) {
+            pthread_t t;
+            pthread_create(&t, NULL, gs_thread, NULL);
+            pthread_detach(t);
+        }
+    }
+    if (async && (ch == 1 || ch == 2)) { queue_transfer(ch); return; }
+    transfer(c, ch);
+    finish(ch);
 }
 
 u32 dmac_read(u32 a) {
@@ -170,8 +234,8 @@ u32 dmac_read(u32 a) {
 
 int dmac_write(Ctx *c, u32 a, u32 v) {
     if (a == 0x1000E010) {                          /* D_STAT: write 1 clears a status bit, toggles a mask bit */
-        d_stat &= ~(v & 0x3FF);
-        d_stat ^= v & 0x3FF0000;
+        __atomic_and_fetch(&d_stat, ~(v & 0x3FF), __ATOMIC_ACQ_REL);
+        __atomic_xor_fetch(&d_stat, v & 0x3FF0000, __ATOMIC_ACQ_REL);
         return 1;
     }
     int ch = dmac_channel_of(a);
