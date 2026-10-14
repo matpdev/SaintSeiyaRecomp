@@ -174,6 +174,7 @@ static SDL_GPUTexture *target(Target *list, int *n, u32 key, int depth) {
                   SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
     list[*n] = (Target){key, t};
     (*n)++;
+    rt_log("gpu", "new %s target %X (%d of them)", depth ? "depth" : "colour", key, *n);
     /* new targets start cleared: colour black, depth 0 (the GS's "farthest" with GEQUAL) */
     SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(dev);
     if (depth) {
@@ -410,8 +411,19 @@ void gpu_upload(GpuFrame *f) {
 static u64 shown_priv[5];       /* the displayed frame's PMODE, DISPFB1, DISPLAY1, DISPFB2, DISPLAY2 */
 static int have_shown_priv;
 
+/* At most two replays in flight: waiting for the one before the last keeps the GPU's per-replay
+ * resources (cycled vertex and transfer buffers, uniform blocks) from piling up when frames are
+ * replayed faster than the GPU finishes them. */
+static SDL_GPUFence *inflight[2];
+static int inflight_at;
+
 void gpu_render(GpuFrame *f, const GpuVertex *verts) {
     if (!dev || !f || !f->ndraws) return;
+    if (inflight[inflight_at]) {
+        SDL_WaitForGPUFences(dev, true, &inflight[inflight_at], 1);
+        SDL_ReleaseGPUFence(dev, inflight[inflight_at]);
+        inflight[inflight_at] = NULL;
+    }
     memcpy(shown_priv, f->priv, sizeof shown_priv);
     have_shown_priv = 1;
     frame_no++;
@@ -433,6 +445,15 @@ void gpu_render(GpuFrame *f, const GpuVertex *verts) {
     SDL_GPURenderPass *rp = NULL;
     u32 cur_fbp = ~0u, cur_zbp = ~0u;
     SDL_GPUTexture *cur_color = NULL;
+    /* what is bound in the current render pass: only changes are sent (each one costs the GPU
+     * backend new descriptor sets / uniform space) */
+    SDL_GPUGraphicsPipeline *last_pipe = NULL;
+    SDL_GPUTexture *last_tex = NULL;
+    SDL_GPUSampler *last_smp = NULL;
+    SDL_Rect last_sc = {-1, -1, -1, -1};
+    float last_fix = -1.0f;
+    DrawUniforms last_u;
+    int have_u = 0;
     for (u32 i = 0; i < f->ndraws; i++) {
         GpuDraw *d = &f->draws[i];
         SDL_GPUTexture *color = target(colors, &ncolors, d->fbp, 0);
@@ -476,17 +497,23 @@ void gpu_render(GpuFrame *f, const GpuVertex *verts) {
             SDL_SetGPUViewport(rp, &vp);
             SDL_GPUBufferBinding bb = {vbuf, 0};
             SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
+            float target_size[4] = {RT_SIZE, RT_SIZE, 1.0f / RT_SIZE, 1.0f / RT_SIZE};
+            SDL_PushGPUVertexUniformData(cmd, 0, target_size, sizeof target_size);
+            last_pipe = NULL;
+            last_tex = NULL;
+            last_smp = NULL;
+            last_sc = (SDL_Rect){-1, -1, -1, -1};
+            last_fix = -1.0f;
+            have_u = 0;
         }
         (void)cur_color;
-        SDL_BindGPUGraphicsPipeline(rp, pipe_for(d));
+        SDL_GPUGraphicsPipeline *pipe = pipe_for(d);
+        if (pipe != last_pipe) { SDL_BindGPUGraphicsPipeline(rp, pipe); last_pipe = pipe; }
         SDL_Rect sc = {(int)d->scissor[0] * scale, (int)d->scissor[2] * scale,
                        (int)(d->scissor[1] - d->scissor[0] + 1) * scale, (int)(d->scissor[3] - d->scissor[2] + 1) * scale};
-        SDL_SetGPUScissor(rp, &sc);
+        if (memcmp(&sc, &last_sc, sizeof sc)) { SDL_SetGPUScissor(rp, &sc); last_sc = sc; }
         float fix = (float)((d->alpha >> 32) & 0xFF) / 128.0f;
-        SDL_FColor bc = {fix, fix, fix, fix};
-        SDL_SetGPUBlendConstants(rp, bc);
-        float target_size[4] = {RT_SIZE, RT_SIZE, 1.0f / RT_SIZE, 1.0f / RT_SIZE};
-        SDL_PushGPUVertexUniformData(cmd, 0, target_size, sizeof target_size);
+        if (fix != last_fix) { SDL_FColor bc = {fix, fix, fix, fix}; SDL_SetGPUBlendConstants(rp, bc); last_fix = fix; }
         u32 wm = 0xF;
         int zw = d->zwrite, st;
         atest_masks(d, &wm, &zw, &st);
@@ -494,15 +521,20 @@ void gpu_render(GpuFrame *f, const GpuVertex *verts) {
                           {st, (s32)d->atest[1], (s32)d->atest[2], (s32)d->atest[3]},
                           {tw, th, 1.0f / tw, 1.0f / th},
                           {d->region[0], d->region[1], d->region[2], d->region[3]}};
-        SDL_PushGPUFragmentUniformData(cmd, 0, &u, sizeof u);
+        if (!have_u || memcmp(&u, &last_u, sizeof u)) { SDL_PushGPUFragmentUniformData(cmd, 0, &u, sizeof u); last_u = u; have_u = 1; }
         int smp = (d->filter ? 1 : 0) | (d->wrap_u ? 2 : 0) | (d->wrap_v ? 4 : 0);
         if (d->tex < -1) smp |= 6;
-        SDL_GPUTextureSamplerBinding tsb = {tex, samplers[smp]};
-        SDL_BindGPUFragmentSamplers(rp, 0, &tsb, 1);
+        if (tex != last_tex || samplers[smp] != last_smp) {
+            SDL_GPUTextureSamplerBinding tsb = {tex, samplers[smp]};
+            SDL_BindGPUFragmentSamplers(rp, 0, &tsb, 1);
+            last_tex = tex;
+            last_smp = samplers[smp];
+        }
         SDL_DrawGPUPrimitives(rp, d->count, 1, d->first, 0);
     }
     if (rp) SDL_EndGPURenderPass(rp);
-    SDL_SubmitGPUCommandBuffer(cmd);
+    inflight[inflight_at] = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+    inflight_at ^= 1;
 }
 
 /* ------------------------------------------------------------------------------- display */

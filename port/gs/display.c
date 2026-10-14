@@ -5,6 +5,7 @@
  * The game runs on its own host threads; this side only reads GS memory, once per vertical blank.
  */
 #include <SDL3/SDL.h>
+#include <malloc.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -256,8 +257,11 @@ static void panel_update(void) {
     sk0 = upload_skipped;
     wr0 = upload_written;
     snprintf(panel.line[3], 96, "F3: hide");
-    if (getenv("SSTHEH_PERF_LOG"))
-        fprintf(stderr, "[perf %5u] %s | %s | %s\n", kernel_vblank_count(), panel.line[0], panel.line[1], panel.line[2]);
+    if (getenv("SSTHEH_PERF_LOG")) {
+        struct mallinfo2 mi = mallinfo2();
+        fprintf(stderr, "[perf %5u] %s | %s | %s | heap %zu MB mmap %zu MB\n", kernel_vblank_count(), panel.line[0], panel.line[1],
+                panel.line[2], mi.uordblks >> 20, mi.hblkhd >> 20);
+    }
     t0 = now; prims0 = perf.prims; gs0 = perf.gs_ns; vu0 = perf.vu_ns; vb0 = kernel_vblank_count(); cpu0 = cpu;
     frames = 0;
 }
