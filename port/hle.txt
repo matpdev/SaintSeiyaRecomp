@@ -18,3 +18,17 @@
 0x002A78D0 hle_frame_lines      # scanlines this frame has used, for the time-sliced loaders: see port/hle/frame.c
 0x002BFA80 hle_video_mode       # sets the video mode (D_0050022C): 1 (NTSC, 60 Hz) instead of the region's 2 (PAL): see port/hle/frame.c
 0x00138B20 hle_set_frame_wait   # scenes asking for a frame per two vertical blanks run at the full rate: see port/hle/frame.c
+# libmc2: the worker's synchronous command functions, on a folder (see port/hle/memcard.c)
+0x00132320 hle_mc2_getinfo
+0x001326B0 hle_mc2_format
+0x00132FA8 hle_mc2_unformat
+0x001337D8 hle_mc2_read
+0x001347F0 hle_mc2_write
+0x00134230 hle_mc2_create
+0x00134D10 hle_mc2_delete
+0x00135690 hle_mc2_rename
+0x00135108 hle_mc2_getdir
+0x00134F80 hle_mc2_chdir
+0x00135578 hle_mc2_chmod
+0x00133320 hle_mc2_lookup
+0x001374F0 hle_mc2_request

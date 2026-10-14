@@ -16,13 +16,14 @@ vozes e controle.
 | Build matching | `SLES_541.62` reconstruído **byte a byte** a partir do assembly gerado pelo splat |
 | Recompilador | as 13.855 funções do executável traduzidas de MIPS R5900 para C (`tools/recomp/`) |
 | CPU / kernel | registradores de 128 bits, FPU do PS2, VU0 em modo macro; threads, semáforos, interrupções, timers |
-| IOP | SIF/RPC, leitura do disco a partir do ISO, controle (PADMAN), CRI ADXI (som), RSSD (só o protocolo) |
+| IOP | SIF/RPC, leitura do disco a partir do ISO, controle (PADMAN), CRI ADXI (som), RSSD (só o protocolo); memory card (libmc2) sobre uma pasta |
 | Gráficos | DMAC → VIF → GIF → GS em thread própria; renderer Vulkan (SDL3 GPU) e GS em software; programas de VU1 traduzidos para código nativo |
 | Imagem | resolução interna pela resolução da tela, supersampling, filtro anisotrópico |
 | Taxa de quadros | 60 Hz (modo NTSC do próprio jogo, com a região europeia); quadros interpolados entre os do jogo, sem limite (ou vsync, F4) |
 | Som | **música e vozes** (CRI ADX) tocam; **efeitos sonoros** (driver RSSD da Dimps: golpes, passos, menus) ainda não |
 | Decompilação | compilador identificado (Metrowerks CodeWarrior PS2 3.0.1, `-O3`, C++), 327 funções de biblioteca nomeadas; nenhuma função do jogo decompilada ainda |
-| Falta | efeitos sonoros, vídeos (Sofdec/MPEG-2 via IPU), memory card, testes do começo ao fim, Windows/macOS |
+| Memory card | o slot 1 é uma pasta (`~/.local/share/sstheh/memcard1`): o jogo salva e carrega normalmente |
+| Falta | efeitos sonoros, vídeos (Sofdec/MPEG-2 via IPU), testes do começo ao fim, Windows/macOS |
 
 Detalhes em [`docs/roadmap.md`](docs/roadmap.md) e [`docs/recon.md`](docs/recon.md).
 
@@ -61,8 +62,9 @@ PATH=$PWD/.venv/bin:$PATH ninja port             # gera build/sstheh (a primeira
 ./build/sstheh                                   # rode de dentro da pasta do repositório
 ```
 
-Na primeira execução o jogo pede o idioma e avisa que não há memory card (o memory card ainda não é emulado: o
-progresso não é salvo).
+Na primeira execução o jogo pede o idioma e avisa que não há save no memory card. Para salvar: Options → Save/Load
+(responda "Yes" para criar o save). O memory card do slot 1 é a pasta `~/.local/share/sstheh/memcard1`: o save fica
+em `BESLES-54162GX/` e é carregado sozinho quando o jogo abre.
 
 ### Controles
 
@@ -90,6 +92,7 @@ indicados, sem janela). Variáveis de ambiente:
 | `SSTHEH_50HZ=1` | modo PAL original (50 Hz) |
 | `SSTHEH_30FPS_SCENES=1` | menus e telas 2D a 30 fps, como no disco |
 | `SSTHEH_PAD2=1` | segundo controle (modos de dois jogadores) |
+| `SSTHEH_MEMCARD=pasta` | onde fica o memory card (padrão `~/.local/share/sstheh/memcard1`) |
 | `SSTHEH_AUDIO=0` | sem som |
 | `SSTHEH_GS=sw` | GS em software em vez de Vulkan (lento) |
 | `SSTHEH_VUJIT=0`, `SSTHEH_GSTHREAD=0`, `SSTHEH_UPLOAD_DEDUP=0` | desligam otimizações (para comparar se algo sair errado) |
@@ -98,7 +101,7 @@ indicados, sem janela). Variáveis de ambiente:
 ### Problemas conhecidos
 
 - efeitos sonoros não tocam (só música e vozes)
-- vídeos não tocam; o memory card não existe (nada é salvo)
+- vídeos não tocam
 - o primeiro uso de cada efeito visual pode engasgar enquanto o código do VU1 compila
 - se algo quebrar, rode com `-v` e anexe o log ao relato, junto com o que estava fazendo na hora
 
