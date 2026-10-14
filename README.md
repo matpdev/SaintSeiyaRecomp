@@ -92,6 +92,7 @@ indicados, sem janela). Variáveis de ambiente:
 | `SSTHEH_50HZ=1` | modo PAL original (50 Hz) |
 | `SSTHEH_30FPS_SCENES=1` | menus e telas 2D a 30 fps, como no disco |
 | `SSTHEH_PAD2=1` | segundo controle (modos de dois jogadores) |
+| `SSTHEH_UNLOCK_ALL=1` | cheat: libera tudo (modos, personagens, cenários, extras); salvando, fica no save |
 | `SSTHEH_MEMCARD=pasta` | onde fica o memory card (padrão `~/.local/share/sstheh/memcard1`) |
 | `SSTHEH_AUDIO=0` | sem som |
 | `SSTHEH_GS=sw` | GS em software em vez de Vulkan (lento) |

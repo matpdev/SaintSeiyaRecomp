@@ -58,3 +58,17 @@ void hle_set_frame_wait(Ctx *c) {
     u32 app = rd32(c, 0x005000A0);
     wr8(c, app + 0x20, keep ? (u8)RW(4) : 0);
 }
+
+/* SSTHEH_UNLOCK_ALL=1: everything unlocked. The game's unlock table (characters, modes, stages,
+ * collectibles) is 0xD4 bytes at 0x00539C30, one per item, bit 0 set when the item is unlocked; the
+ * bits are set again at every vertical blank, so a loaded or a new save gets them (and a save made
+ * keeps them). */
+void cheat_vblank(Ctx *c) {
+    static int on = -1;
+    if (on < 0) on = getenv("SSTHEH_UNLOCK_ALL") && atoi(getenv("SSTHEH_UNLOCK_ALL"));
+    if (!on) return;
+    for (u32 i = 0; i < 0xD4; i++) {
+        u8 v = rd8(c, 0x00539C30 + i);
+        if (!(v & 1)) wr8(c, 0x00539C30 + i, v | 1);
+    }
+}

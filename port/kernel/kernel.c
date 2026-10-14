@@ -234,6 +234,7 @@ static void run_interrupts(void) {
     hsyncs += ntsc ? 262 : 312;
     if (intc_mask & (1 << 2)) run_handlers(intc, 2);       /* VBLANK_START */
     if (intc_mask & (1 << 3)) run_handlers(intc, 3);       /* VBLANK_END */
+    { void cheat_vblank(Ctx *c); cheat_vblank(&irq_ctx); }
     {   /* SSTHEH_WATCH=addr,from[,ptr_off]: log a word at every vertical blank from `from` on; with
          * ptr_off, the word at (*addr + ptr_off) (tests) */
         static u32 waddr = 1, wfrom, woff = ~0u;
