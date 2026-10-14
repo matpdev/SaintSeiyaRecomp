@@ -8,6 +8,7 @@
  * 0x25 answers each chunk of a data transfer (EE commands 0x20, 0x21).
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "r5900.h"
@@ -40,6 +41,17 @@ u32 srv_rssd(Ctx *c, u32 fn, u8 *in, u32 in_size, u8 *out, u32 out_size) {
         u32 version = 0x04052700;
         memcpy(msg + 0x10, &version, 4);
         iop_call_ee(EE_SERVER, 0xF0, msg, sizeof msg);
+    }
+    {   /* SSTHEH_RSSD_DUMP=dir: every request's data, one file each (tests) */
+        static const char *dir = (const char *)1;
+        static u32 nreq;
+        if (dir == (const char *)1) dir = getenv("SSTHEH_RSSD_DUMP");
+        if (dir) {
+            char path[512];
+            snprintf(path, sizeof path, "%s/%05u_%03X_%u.bin", dir, nreq++, fn, in_size);
+            FILE *f = fopen(path, "wb");
+            if (f) { fwrite(in, 1, in_size, f); fclose(f); }
+        }
     }
     if (fn == 0x20 || fn == 0x21) {
         /* a chunk of sound data was sent (0x20 first, 0x21 the next ones): 0x25 "chunk received",
