@@ -13,6 +13,7 @@
  * SDL_GPU binding sets for SPIR-V: vertex uniforms set 1, fragment samplers set 2, fragment uniforms set 3.
  */
 #include <SDL3/SDL.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -110,8 +111,17 @@ static SDL_GPUGraphicsPipeline *simple_pipe(SDL_GPUTextureFormat fmt, int blend)
 
 int gpu_init(void *sdl_window) {
     const char *sc = getenv("SSTHEH_SCALE");
-    if (sc && atoi(sc) >= 1 && atoi(sc) <= 4) scale = atoi(sc);
     win = sdl_window;
+    if (sc && atoi(sc) >= 1 && atoi(sc) <= 8) scale = atoi(sc);
+    else if (win) {
+        /* the screen's height, and half as much again to average down (supersampling); at most 4
+           (a 4096 x 4096 target per buffer) unless asked for */
+        const SDL_DisplayMode *m = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(win));
+        int h = m ? m->h : 1080;
+        scale = (h * 3 / 2 + 447) / 448;
+        if (scale < 2) scale = 2;
+        if (scale > 4) scale = 4;
+    }
     dev = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV, false, NULL);
     if (!dev) { rt_log("gpu", "no GPU device: %s", SDL_GetError()); return -1; }
     if (win && !SDL_ClaimWindowForGPUDevice(dev, win)) { rt_log("gpu", "window: %s", SDL_GetError()); return -1; }
@@ -123,10 +133,12 @@ int gpu_init(void *sdl_window) {
     vs = shader(gs_vert_spv, sizeof gs_vert_spv, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
     fs = shader(gs_frag_spv, sizeof gs_frag_spv, SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
     pvs = shader(present_vert_spv, sizeof present_vert_spv, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
-    pfs = shader(present_frag_spv, sizeof present_frag_spv, SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 0);
+    pfs = shader(present_frag_spv, sizeof present_frag_spv, SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
     for (int i = 0; i < 8; i++) {
         SDL_GPUSamplerCreateInfo si = {0};
         si.min_filter = si.mag_filter = (i & 1) ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;
+        si.enable_anisotropy = (i & 1) != 0;          /* textures seen at an angle (floors) stay sharp */
+        si.max_anisotropy = 16;
         si.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
         si.address_mode_u = (i & 2) ? SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE : SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
         si.address_mode_v = (i & 4) ? SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE : SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
@@ -566,6 +578,12 @@ void gpu_present(void) {
         SDL_SetGPUViewport(rp, &vp);
         SDL_BindGPUGraphicsPipeline(rp, present_pipe);
         SDL_PushGPUVertexUniformData(cmd, 0, rect, sizeof rect);
+        /* supersampling: as many taps per axis as picture pixels per window pixel (up to 4) */
+        float ratio = (float)(w * scale) / vw;
+        int taps = ratio <= 1.0f ? 1 : (int)ceilf(ratio);
+        if (taps > 4) taps = 4;
+        float down[4] = {(rect[2] - rect[0]) / vw, (rect[3] - rect[1]) / vh, (float)taps, 0};
+        SDL_PushGPUFragmentUniformData(cmd, 0, down, sizeof down);
         SDL_GPUTextureSamplerBinding tsb = {src, samplers[1 | 6]};
         SDL_BindGPUFragmentSamplers(rp, 0, &tsb, 1);
         SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
@@ -574,8 +592,9 @@ void gpu_present(void) {
         SDL_GPUViewport vp = {4, 4, (float)overlay_w, (float)overlay_h, 0, 1};
         SDL_SetGPUViewport(rp, &vp);
         SDL_BindGPUGraphicsPipeline(rp, overlay_pipe);
-        float full[4] = {0, 0, 1, 1};
+        float full[4] = {0, 0, 1, 1}, one[4] = {0, 0, 1, 0};
         SDL_PushGPUVertexUniformData(cmd, 0, full, sizeof full);
+        SDL_PushGPUFragmentUniformData(cmd, 0, one, sizeof one);
         SDL_GPUTextureSamplerBinding tsb = {overlay, samplers[6]};
         SDL_BindGPUFragmentSamplers(rp, 0, &tsb, 1);
         SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
