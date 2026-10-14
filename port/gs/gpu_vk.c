@@ -111,6 +111,21 @@ static SDL_GPUGraphicsPipeline *simple_pipe(SDL_GPUTextureFormat fmt, int blend)
     return SDL_CreateGPUGraphicsPipeline(dev, &ci);
 }
 
+static int vsync_on = 1;
+
+/* Waiting for the screen (vsync) or not: then pictures are made as fast as possible, the screen
+ * showing the newest (mailbox: no tearing; immediate where that's all there is). */
+void gpu_set_vsync(int on) {
+    if (!dev || !win) return;
+    SDL_GPUPresentMode m = SDL_GPU_PRESENTMODE_VSYNC;
+    if (!on) m = SDL_WindowSupportsGPUPresentMode(dev, win, SDL_GPU_PRESENTMODE_MAILBOX) ? SDL_GPU_PRESENTMODE_MAILBOX
+                                                                                       : SDL_GPU_PRESENTMODE_IMMEDIATE;
+    if (!SDL_SetGPUSwapchainParameters(dev, win, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, m)) rt_log("gpu", "present mode: %s", SDL_GetError());
+    else vsync_on = on;
+}
+
+int gpu_vsync(void) { return vsync_on; }
+
 int gpu_init(void *sdl_window) {
     const char *sc = getenv("SSTHEH_SCALE");
     win = sdl_window;
@@ -152,13 +167,8 @@ int gpu_init(void *sdl_window) {
                       SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
     present_pipe = simple_pipe(swap_fmt, 0);
     overlay_pipe = simple_pipe(swap_fmt, 1);
-    /* SSTHEH_VSYNC=0: don't wait for the screen (mailbox, or immediate if that's all there is) */
-    if (win && getenv("SSTHEH_VSYNC") && !atoi(getenv("SSTHEH_VSYNC"))) {
-        SDL_GPUPresentMode m = SDL_WindowSupportsGPUPresentMode(dev, win, SDL_GPU_PRESENTMODE_MAILBOX)
-                                   ? SDL_GPU_PRESENTMODE_MAILBOX : SDL_GPU_PRESENTMODE_IMMEDIATE;
-        if (!SDL_SetGPUSwapchainParameters(dev, win, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, m))
-            rt_log("gpu", "present mode: %s", SDL_GetError());
-    }
+    /* frame rate unlocked unless SSTHEH_VSYNC=1 (F4 switches) */
+    if (win) gpu_set_vsync(getenv("SSTHEH_VSYNC") && atoi(getenv("SSTHEH_VSYNC")));
     return 0;
 }
 

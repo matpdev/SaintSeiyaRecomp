@@ -69,5 +69,7 @@ u32 gpu_tex_stats(u64 *bytes);                   /* textures alive and their dec
 int gpu_init(void *sdl_window);                  /* window NULL: off screen (--shot) */
 void gpu_upload(GpuFrame *f);                    /* a new frame's textures (once per frame) */
 void gpu_render(GpuFrame *f, const GpuVertex *verts);   /* replay a frame (verts: NULL, or moved copies) */
-void gpu_present(void);                          /* show the displayed buffer in the window */
+void gpu_present(void);
+void gpu_set_vsync(int on);                       /* wait for the screen, or show pictures as fast as made */
+int gpu_vsync(void);                          /* show the displayed buffer in the window */
 int gpu_read_display(u32 *out, int max_w, int max_h, int *w, int *h);   /* for --shot */

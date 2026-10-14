@@ -256,7 +256,7 @@ static void panel_update(void) {
              (upload_written - wr0 + upload_skipped - sk0) / dt, (upload_skipped - sk0) / dt);
     sk0 = upload_skipped;
     wr0 = upload_written;
-    snprintf(panel.line[3], 96, "F3: hide");
+    snprintf(panel.line[3], 96, "F3: hide  F4: vsync %s", gpu_on && gpu_vsync() ? "on" : "off");
     if (getenv("SSTHEH_PERF_LOG")) {
         struct mallinfo2 mi = mallinfo2();
         fprintf(stderr, "[perf %5u] %s | %s | %s | heap %zu MB mmap %zu MB\n", kernel_vblank_count(), panel.line[0], panel.line[1],
@@ -293,8 +293,8 @@ static void overlay_update(void) {
     gpu_set_overlay(surf->pixels, surf->w, surf->h);
 }
 
-/* Window with the GPU renderer: as often as the screen takes pictures (or as fast as possible
- * with SSTHEH_VSYNC=0), show the game's newest frame, moved part of the way from the one before
+/* Window with the GPU renderer: as fast as possible (or as often as the screen takes pictures
+ * with vsync: SSTHEH_VSYNC=1 or F4), show the game's newest frame, moved part of the way from the one before
  * it by the time since it came (SSTHEH_INTERP=0: the newest frame as it is). */
 static int display_window_gpu(void) {
     SDL_Window *win = SDL_CreateWindow("Saint Seiya: The Hades", 1280, 960, SDL_WINDOW_RESIZABLE);
@@ -310,6 +310,7 @@ static int display_window_gpu(void) {
             if (e.type == SDL_EVENT_QUIT) { SDL_Quit(); _exit(0); }
             if (e.type == SDL_EVENT_GAMEPAD_ADDED && !gamepad) gamepad = SDL_OpenGamepad(e.gdevice.which);
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F3) panel_on = !panel_on;
+            if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F4) gpu_set_vsync(!gpu_vsync());
         }
         pad_buttons[0] = keyboard() | gamepad_buttons() | scripted(kernel_vblank_count());
         u32 vb = kernel_vblank_count();
