@@ -222,7 +222,12 @@ static double cpu_seconds(void) {
 
 /* Called at every vertical blank shown. A game frame is counted when primitives were drawn since
    the previous vertical blank. */
+volatile int perf_timing;
+
 static void panel_update(void) {
+    static int log = -1;
+    if (log < 0) log = getenv("SSTHEH_PERF_LOG") != NULL;
+    perf_timing = panel_on || log;
     static u64 t0, prims0, gs0, vu0, last_prims;
     static u32 vb0, frames;
     static double cpu0;
@@ -244,7 +249,12 @@ static void panel_update(void) {
     sealed0 = sealed;
     snprintf(panel.line[1], 96, "CPU %3.0f%%  GS %3.0f%%  VU1 %3.0f%%  game %3.0f%%", 100 * total / dt,
              100 * gs / dt, 100 * vu / dt, 100 * game / dt);
-    snprintf(panel.line[2], 96, "%.0f primitives/s", (perf.prims - prims0) / dt);
+    extern u64 upload_skipped, upload_written;
+    static u64 sk0, wr0;
+    snprintf(panel.line[2], 96, "%.0f primitives/s  uploads %.0f/s (%.0f skipped)", (perf.prims - prims0) / dt,
+             (upload_written - wr0 + upload_skipped - sk0) / dt, (upload_skipped - sk0) / dt);
+    sk0 = upload_skipped;
+    wr0 = upload_written;
     snprintf(panel.line[3], 96, "F3: hide");
     if (getenv("SSTHEH_PERF_LOG"))
         fprintf(stderr, "[perf %5u] %s | %s | %s\n", kernel_vblank_count(), panel.line[0], panel.line[1], panel.line[2]);

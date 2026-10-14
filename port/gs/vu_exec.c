@@ -211,7 +211,9 @@ static void run(Vu *v) {
 void vu_start(int id, int addr, u32 itop) {
     Vu *v = &vus[id & 1];
     static int dumped;
-    if (id == 1 && !dumped && getenv("SSTHEH_VUDUMP") && programs_run > 200) {
+    static int want_dump = -1;
+    if (want_dump < 0) want_dump = getenv("SSTHEH_VUDUMP") != NULL;
+    if (id == 1 && want_dump && !dumped && programs_run > 200) {
         dumped = 1;
         FILE *f = fopen("build/vu1_code.bin", "wb"); fwrite(vu1_code, 1, sizeof vu1_code, f); fclose(f);
         f = fopen("build/vu1_mem.bin", "wb"); fwrite(vu1_mem, 1, sizeof vu1_mem, f); fclose(f);
@@ -222,7 +224,7 @@ void vu_start(int id, int addr, u32 itop) {
     if (snap < 0) snap = getenv("SSTHEH_VUSNAP") != NULL;
     if (id == 1 && snap) snap_count();
     if (addr >= 0) v->pc = (u32)addr * 8;
-    u64 t = perf_now();
+    u64 t = perf_stamp();
     v->vf[0].f[0] = v->vf[0].f[1] = v->vf[0].f[2] = 0.0f;
     v->vf[0].f[3] = 1.0f;
     u32 csr = _mm_getcsr();
@@ -240,7 +242,9 @@ void vu_start(int id, int addr, u32 itop) {
         if (v->id == 1) {
             partial_runs++;
             by_pc[(v->pc & 0x3FFF) / 8]++;
-            if (getenv("SSTHEH_VUJIT_MISS") && (partial_runs & 0x3FFF) == 0) {
+            static int want_miss = -1;
+            if (want_miss < 0) want_miss = getenv("SSTHEH_VUJIT_MISS") != NULL;
+            if (want_miss && (partial_runs & 0x3FFF) == 0) {
                 for (int k = 0; k < 0x800; k++)
                     if (by_pc[k] > 500) rt_log("vu", "interpreted from %03X: %u times", k * 8, by_pc[k]);
             }
@@ -250,7 +254,7 @@ void vu_start(int id, int addr, u32 itop) {
     if (id == 1 && (programs_run & 0xFFFFF) == 0)
         rt_log("vu", "VU1: %llu programs fully native, %llu (partly) interpreted, %llu pairs interpreted",
                (unsigned long long)native_runs, (unsigned long long)partial_runs, (unsigned long long)pairs_run);
-    u64 dt = perf_now() - t;
+    u64 dt = t ? perf_now() - t : 0;
     perf.vu_ns += dt;
     perf.gs_ns -= 0;   /* (XGKICK time, inside run(), is also in gs_ns) */
 }

@@ -672,7 +672,10 @@ static u32 tex_alloc(u32 w, u32 h) {
 
 u32 gpu_tex_stats(u64 *bytes) { *bytes = tex_bytes; return GPU_MAX_TEX - 1 - ntex_free; }
 
+static void transfer_flush(void);
+
 static s32 texture_for(int ctx, u32 *w_out, u32 *h_out) {
+    transfer_flush();
     u64 t0 = gs.tex0[ctx];
     u32 tbp = t0 & 0x3FFF, tbw = (t0 >> 14) & 0x3F, psm = (t0 >> 20) & 0x3F;
     u32 tw = 1u << ((t0 >> 26) & 15), th = 1u << ((t0 >> 30) & 15);
@@ -837,7 +840,10 @@ static void local_to_local(void) {
     pages_written(dbp, ((dbw ? dbw : 1) * 64 * (dy + h) * (u32)psm_bits(dpsm) / 8 + 255) / 256);
 }
 
+static void transfer_flush(void);
+
 static void transfer_begin(void) {
+    transfer_flush();                                   /* an upload left incomplete */
     u32 dir = gs.trxdir & 3;
     gs.transfer = dir == 0;
     gs.tx = (gs.trxpos >> 32) & 0x7FF;
@@ -848,7 +854,7 @@ static void transfer_begin(void) {
     if (dir == 2) local_to_local();
 }
 
-static void transfer_data(const u8 *p, u32 bytes) {
+static void transfer_write(const u8 *p, u32 bytes) {
     if (!gs.transfer || gs.tw == 0) return;
     u32 dbp = (gs.bitbltbuf >> 32) & 0x3FFF, dbw = (gs.bitbltbuf >> 48) & 0x3F, dpsm = (gs.bitbltbuf >> 56) & 0x3F;
     pages_written(dbp, ((dbw ? dbw : 1) * 64 * (gs.ty + gs.th + 64) * (u32)psm_bits(dpsm) / 8 + 255) / 256);
@@ -896,6 +902,66 @@ static void transfer_data(const u8 *p, u32 bytes) {
         }
         vram_rw(dbp, dbw, dpsm, x, y, 1, c);
     }
+}
+
+/* Image uploads (host -> GS) are kept whole until complete and dropped when the same data was
+ * last written to the same place and those pages haven't changed since: the game uploads many
+ * textures again every frame, and writing them would also make the texture cache hash them again.
+ * SSTHEH_UPLOAD_DEDUP=0: always write. */
+static u8 *tbuf;
+static u32 tbuf_len, tbuf_cap, tbuf_need;
+typedef struct { u64 key, hash, pages; u32 used; } Upload;
+static Upload uploads_seen[1024];
+u64 upload_skipped, upload_written;
+
+static u64 hash_bytes(const u8 *p, u32 n) {
+    u64 h = 0xCBF29CE484222325ull ^ n;
+    u32 i = 0;
+    for (; i + 8 <= n; i += 8) { u64 w; memcpy(&w, p + i, 8); h = (h ^ w) * 0x100000001B3ull; h ^= h >> 29; }
+    for (; i < n; i++) h = (h ^ p[i]) * 0x100000001B3ull;
+    return h;
+}
+
+static void upload_pages(u32 *first, u32 *n) {
+    u32 dbp = (gs.bitbltbuf >> 32) & 0x3FFF, dbw = (gs.bitbltbuf >> 48) & 0x3F, dpsm = (gs.bitbltbuf >> 56) & 0x3F;
+    u32 blocks = ((dbw ? dbw : 1) * 64 * (gs.ty + gs.th + 64) * (u32)psm_bits(dpsm) / 8 + 255) / 256;
+    *first = dbp / 32;
+    *n = (dbp + blocks) / 32 - dbp / 32 + 1;
+    if (*n > 512) *n = 512;
+}
+
+static void transfer_flush(void) {
+    if (!tbuf_len) return;
+    static int dedup = -1;
+    if (dedup < 0) dedup = !(getenv("SSTHEH_UPLOAD_DEDUP") && !atoi(getenv("SSTHEH_UPLOAD_DEDUP")));
+    u32 len = tbuf_len;
+    tbuf_len = 0;
+    int complete = len >= tbuf_need;
+    u64 key = ((gs.bitbltbuf >> 32) & 0xFFFFFFFFull) * 0x9E3779B97F4A7C15ull ^ (u64)gs.tx << 48 ^ (u64)gs.ty << 32 ^ (u64)gs.tw << 16 ^ gs.th;
+    Upload *e = &uploads_seen[(key ^ key >> 29) % 1024];
+    u32 first, n;
+    upload_pages(&first, &n);
+    u64 h = 0;
+    if (dedup && complete) {
+        h = hash_bytes(tbuf, len);
+        if (e->used && e->key == key && e->hash == h && e->pages == pages_version(first, n)) {
+            gs.tpos = gs.tw * gs.th;                   /* the transfer is over, nothing changes */
+            upload_skipped++;
+            return;
+        }
+    }
+    transfer_write(tbuf, len);
+    upload_written++;
+    if (dedup && complete) *e = (Upload){key, h, pages_version(first, n), 1};
+}
+
+static void transfer_data(const u8 *p, u32 bytes) {
+    if (!gs.transfer || gs.tw == 0) return;
+    if (!tbuf_len) tbuf_need = (gs.tw * gs.th * (u32)psm_bits((gs.bitbltbuf >> 56) & 0x3F) + 7) / 8;
+    if (tbuf_len + bytes > tbuf_cap) { tbuf_cap = (tbuf_len + bytes) * 2; tbuf = realloc(tbuf, tbuf_cap); }
+    memcpy(tbuf + tbuf_len, p, bytes);
+    tbuf_len += bytes;
+    if (tbuf_len >= tbuf_need) transfer_flush();
 }
 
 /* ------------------------------------------------------------------------------- registers */
@@ -1058,21 +1124,21 @@ void gif_path1(const u8 *vu_mem, u32 addr) {
     memcpy(buf + (0x4000 - a), vu_mem, a);
     paths[0].tag_lo = 0;
     paths[0].loops = 0;
-    u64 t = perf_now();
+    u64 t = perf_stamp();
     gif(&paths[0], buf, 0x400, 1);
-    perf.gs_ns += perf_now() - t;
+    if (t) perf.gs_ns += perf_now() - t;
 }
 
 void gif_path2(const u8 *data, u32 qwc) {
-    u64 t = perf_now();
+    u64 t = perf_stamp();
     gif(&paths[1], data, qwc, 0);
-    perf.gs_ns += perf_now() - t;
+    if (t) perf.gs_ns += perf_now() - t;
 }
 
 void gif_dma(const u8 *data, u32 qwc) {
-    u64 t = perf_now();
+    u64 t = perf_stamp();
     gif(&paths[2], data, qwc, 0);
-    perf.gs_ns += perf_now() - t;
+    if (t) perf.gs_ns += perf_now() - t;
 }
 
 /* ------------------------------------------------------------------------------- display */

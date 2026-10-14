@@ -31,6 +31,45 @@ void vu_load_program(int vu, u32 addr, const u32 *words, u32 count) {
     if (changed) vu_code_written(vu, addr & (size - 1), count * 4);   /* the same code again is common */
 }
 
+/* The common case (no mask, MODE 0, CL >= WL): each format copied straight. */
+static void unpack_fast(u8 *mem, u32 qwords, u32 addr, u32 num, u32 cl, u32 wl, int vn, int vl, int usn, const u8 *src) {
+    u32 cycle = 0;
+    for (u32 n = 0; n < num; n++) {
+        u32 *dst = (u32 *)(mem + (addr % qwords) * 16);
+        switch (vl << 2 | vn) {
+        case 0x3: memcpy(dst, src, 16); src += 16; break;                                       /* V4-32 */
+        case 0x2: memcpy(dst, src, 12); src += 12; break;                                       /* V3-32 */
+        case 0x1: memcpy(dst, src, 8); src += 8; break;                                         /* V2-32 */
+        case 0x0: { u32 x; memcpy(&x, src, 4); dst[0] = dst[1] = dst[2] = dst[3] = x; src += 4; break; }   /* S-32 */
+        case 0x7: case 0x6: case 0x5: case 0x4: {                                               /* 16 bits */
+            const u16 *h = (const u16 *)src;
+            if (vn == 0) { u32 x = usn ? h[0] : (u32)(s32)(s16)h[0]; dst[0] = dst[1] = dst[2] = dst[3] = x; }
+            else for (int k = 0; k <= vn; k++) dst[k] = usn ? h[k] : (u32)(s32)(s16)h[k];
+            src += 2 * (vn + 1);
+            break;
+        }
+        case 0xB: case 0xA: case 0x9: case 0x8: {                                               /* 8 bits */
+            if (vn == 0) { u32 x = usn ? src[0] : (u32)(s32)(s8)src[0]; dst[0] = dst[1] = dst[2] = dst[3] = x; }
+            else for (int k = 0; k <= vn; k++) dst[k] = usn ? src[k] : (u32)(s32)(s8)src[k];
+            src += vn + 1;
+            break;
+        }
+        default: {                                                                              /* V4-5 */
+            u16 h;
+            memcpy(&h, src, 2);
+            dst[0] = (h & 0x1F) << 3;
+            dst[1] = ((h >> 5) & 0x1F) << 3;
+            dst[2] = ((h >> 10) & 0x1F) << 3;
+            dst[3] = (h >> 15) << 7;
+            src += 2;
+            break;
+        }
+        }
+        addr++;
+        if (++cycle == wl) { addr += cl - wl; cycle = 0; }
+    }
+}
+
 void vu_unpack(int vu, const VuUnpack *u, const u32 *data) {
     u8 *mem = vu ? vu1_mem : vu0_mem;
     u32 qwords = vu ? 0x400 : 0x100;
@@ -43,6 +82,10 @@ void vu_unpack(int vu, const VuUnpack *u, const u32 *data) {
     u32 cl = u->cl ? u->cl : 1, wl = u->wl ? u->wl : 1;
     const u8 *src = (const u8 *)data;
     u32 bits = vl == 3 ? 16 : (32 >> vl) * (vn + 1);
+    if (!masked && u->mode == 0 && cl >= wl) {
+        unpack_fast(mem, qwords, addr, num, cl, wl, (int)vn, (int)vl, usn, (const u8 *)data);
+        return;
+    }
     u32 bitpos = 0, cycle = 0;
     u32 row[4];
     memcpy(row, u->row, 16);
