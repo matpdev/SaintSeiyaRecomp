@@ -1,47 +1,46 @@
-# Contribuindo
+# Contributing
 
-Toda ajuda é bem-vinda: decompilar funções, melhorar o port ou testar e relatar problemas.
+All help is welcome: decompiling functions, improving the port, or testing and reporting problems. Issues and
+pull requests in Portuguese are welcome too.
 
-## Regra principal
+## The main rule
 
-**Nada do jogo entra no repositório**: nem o executável, nem a ISO, nem arquivos extraídos dela
-(texturas, sons, modelos). O `.gitignore` já exclui `disc/`, `asm/`, `assets/` e `build/`. Confira o
-`git status` antes de cada commit.
+**Nothing from the game goes into the repository**: not the executable, not the ISO, not files extracted from
+it (textures, sounds, models). `.gitignore` already excludes `disc/`, `asm/`, `assets/` and `build/`. Check
+`git status` before every commit.
 
-## Testando
+## Testing
 
-Rode o port (veja o README) e abra uma issue com:
+Run the port (see the README) and open an issue with:
 
-- o que aconteceu e onde (tela, personagem, modo de jogo);
-- a GPU, o driver e a distribuição;
-- a saída do terminal (`./build/sstheh -v 2> log.txt` dá mais detalhes);
-- se o problema some com `SSTHEH_GS=sw` (renderer em software).
+- what happened and where (screen, character, game mode);
+- your GPU, driver and distribution;
+- the terminal output (`./jogar.sh -v 2> log.txt` gives more detail);
+- whether the problem goes away with `SSTHEH_GS=sw` (software renderer).
 
-## Decompilando uma função
+## Decompiling a function
 
-O objetivo é C++ que, compilado com o mesmo compilador do jogo, gere **exatamente** as mesmas instruções.
+The goal is C++ that, built with the game's compiler, produces **exactly** the same instructions.
 
-1. Escolha uma função em `asm/game_*.s` (cada uma fica entre `glabel` e `endlabel`). Funções pequenas e
-   folhas (que não chamam outras) são o melhor começo. `tools/recon/xref.py` mostra quem a chama e que
-   strings ela usa.
-2. Escreva o C++ em `src/…` com o nome `func_XXXXXXXX`, ou dê um nome e registre em
-   `config/symbol_addrs.txt`.
-3. Rode `tools/fdiff.py src/arquivo.cpp` até aparecer `OK` para a função.
-4. Rode `ninja`: o build tem que continuar terminando em `OK: build matches the original`.
+1. Pick a function in `asm/game_*.s` (each sits between `glabel` and `endlabel`). Small leaf functions (that
+   call nothing else) are the best start. `tools/recon/xref.py` shows who calls it and which strings it uses.
+2. Write the C++ in `src/…` named `func_XXXXXXXX`, or give it a name and add it to `config/symbol_addrs.txt`.
+3. Run `tools/fdiff.py src/file.cpp` until the function shows `OK`.
+4. Run `ninja`: the build must still end with `OK: build matches the original`.
 
-O [decomp.me](https://decomp.me) ajuda a experimentar: use o compilador Metrowerks CodeWarrior PS2 3.0.1
-com `-O3`.
+[decomp.me](https://decomp.me) helps to experiment: use the Metrowerks CodeWarrior PS2 3.0.1 compiler with
+`-O3`.
 
-## Mexendo no port
+## Working on the port
 
-- O código nativo fica em `port/`; o recompilador, em `tools/recomp/recomp.py`.
-- Para trocar uma função do jogo por uma nativa, adicione o endereço em `port/hle.txt` e implemente em
+- Native code lives in `port/`; the recompiler in `tools/recomp/recomp.py`.
+- To replace a game function with a native one, add its address to `port/hle.txt` and implement it in
   `port/hle/`.
-- Siga o estilo do arquivo que estiver editando (C, comentários curtos explicando o hardware do PS2).
-- Confira que o jogo ainda chega à tela de título e a uma luta. `--shot N,M` salva capturas sem abrir
-  janela, útil para comparar antes e depois.
+- Follow the style of the file you are editing (C, short comments explaining the PS2 hardware).
+- Check that the game still reaches the title screen and a fight. `--shot N,M` saves screenshots without a
+  window, handy to compare before and after.
 
 ## Pull requests
 
-- Um assunto por PR, com uma descrição curta do que muda e de como foi testado.
-- Commits com mensagens no imperativo ou descritivas, como as do histórico.
+- One topic per PR, with a short description of what changes and how it was tested.
+- Commit messages in the imperative or descriptive, like the ones in the history.

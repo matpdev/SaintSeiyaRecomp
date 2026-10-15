@@ -1,65 +1,53 @@
-# Roteiro: do executável ao jogo rodando no PC
+# Roadmap: from the executable to the game running on PC
 
-Decidido em 2026-10-13: **caminho híbrido**. Toda função ainda não decompilada é traduzida automaticamente
-de MIPS (R5900) para C pelo recompilador. O resultado é ligado a uma camada de plataforma que faz o papel
-do hardware do PS2. A decomp matching continua em paralelo, e cada função decompilada substitui a traduzida.
+Decided on 2026-10-13: **the hybrid path**. Every function not decompiled yet is translated automatically from
+MIPS (R5900) to C by the recompiler. The result is linked with a platform layer that plays the part of the
+PS2's hardware. The matching decomp goes on in parallel, and each decompiled function replaces the translated
+one.
 
-## Peças
+## Pieces
 
-| Peça | O que faz | Onde |
+| Piece | What it does | Where |
 |---|---|---|
-| Recompilador | Lê o ELF e as fronteiras de função do splat e gera C (um arquivo por bloco de funções) | `tools/recomp/` |
-| Runtime da CPU | Registradores de 128 bits, FPU do PS2 (sem IEEE), VU0 em modo macro, memória (32 MB + scratchpad) | `port/runtime/` |
-| Kernel HLE | Syscalls do kernel do PS2: threads, semáforos, interrupções (VBlank, DMA), alarmes | `port/kernel/` |
-| IOP HLE | RPC via SIF para os serviços do IOP: arquivos (cdvd/fileio), controle, memory card, som (libsd, CRI ADXI) | `port/iop/` |
-| Gráficos | DMA → VIF → GIF → GS; interpretador de VU1 para o microcódigo do jogo | `port/gs/` (base: `port/src/gs` do Tenkaichi3Decomp, MIT) |
-| Som | Decodificação ADX e mixagem (base: `snd_adx.c` do Tenkaichi3Decomp) | `port/snd/` |
-| Vídeo | Sofdec/MPEG-2 via IPU (cutscenes) | depois |
+| Recompiler | Reads the ELF and splat's function boundaries and writes C (one file per block of functions) | `tools/recomp/` |
+| CPU runtime | 128-bit registers, the PS2's FPU (not IEEE), VU0 macro mode, memory (32 MB + scratchpad) | `port/runtime/` |
+| Kernel HLE | PS2 kernel syscalls: threads, semaphores, interrupts (VBlank, DMA), alarms | `port/kernel/` |
+| IOP HLE | SIF RPC to the IOP's services: files (cdvd/fileio), controller, memory card, CRI ADXI sound | `port/iop/`, `port/hle/` |
+| IOP LLE | The game's sound driver (SSD/RSSD) run from the disc: MIPS I interpreter, IRX loader, SPU2 | `port/iop/lle/` |
+| Graphics | DMA → VIF → GIF → GS; VU1 microcode translated to native code; Vulkan renderer | `port/gs/` (based on Tenkaichi3Decomp's `port/src/gs`, MIT) |
+| Video | Sofdec/MPEG-2 through the IPU (cutscenes) | later |
 
-## Marcos
+## Milestones
 
-1. **O recompilador gera C para todas as funções e o C compila.**
-2. **O jogo inicia:** `crt0` → `main` rodam nativamente; syscalls registradas no log até o primeiro bloqueio.
-3. **Arquivos:** leitura do `AFSDATA.AFS` e dos outros arquivos do disco pelo IOP HLE.
-4. **Primeira imagem:** o GS desenha a tela de título (sem 3D).
-5. **3D:** interpretador de VU1; lutas visíveis.
-6. **Som e controle.**
-7. **Jogável do começo ao fim**; vídeos.
-8. Em paralelo e para sempre: decomp matching substituindo o código traduzido.
+1. **The recompiler writes C for every function, and the C compiles.**
+2. **The game boots:** `crt0` → `main` run natively; syscalls logged up to the first block.
+3. **Files:** `AFSDATA.AFS` and the disc's other files read through the IOP HLE.
+4. **First picture:** the GS draws the title screen (no 3D).
+5. **3D:** VU1; fights visible.
+6. **Sound and controller.**
+7. **Playable from start to end**; videos.
+8. In parallel, forever: the matching decomp replacing translated code.
 
-## Estado
+## Status
 
-**Atualizado em 2026-10-14:** marcos 1 a 6 concluídos. O jogo roda nativamente da tela de título às lutas
-em 3D, com som (CRI ADXI, RSSD) e controle (PADMAN). Renderer Vulkan pelo SDL3 GPU, programas de VU1
-traduzidos para código nativo, 60 Hz com quadros interpolados. Faltam os vídeos (marco 7), o memory card e
-testes do começo ao fim. O histórico abaixo registra como cada marco foi alcançado.
+**Updated 2026-10-15:** milestones 1 to 6 done. The game runs natively from the title screen to 3D fights,
+with music and voices (CRI ADXI), sound effects (the disc's own SSD/RSSD driver on an emulated IOP and SPU2),
+controller (PADMAN) and memory card (libmc2 on a folder). Vulkan renderer through SDL3 GPU, VU1 programs
+translated to native code, 60 Hz with interpolated frames. Left: videos (milestone 7), SPU2 reverb, and full
+playthrough testing.
 
-### Histórico
+### History
 
-- Marco 0 (preparação): concluído. O build é idêntico ao original e há 327 funções de biblioteca nomeadas.
-- Marco 1: concluído. As 13.855 funções são traduzidas para C (`tools/recomp/recomp.py`) e compilam.
-- Marco 2: quase concluído. `build/sstheh` roda crt0, a inicialização do SDK e `main`. O jogo:
-  - imprime `::main: Incoming.`, inicializa o alocador (`CMemoryAllocator::Init`);
-  - inicializa o SIF/RPC com o IOP HLE (`port/iop/`), reinicia o IOP (IOPRP280) e reconecta;
-  - inicializa o CD/DVD ("Disk Type = PlayStation2 DVD"): libcdvd substituída por leitura do ISO;
-  - carrega os módulos do IOP (simulados), inicializa o som RSSD (handshake 0xF0 via RPC IOP -> EE);
-  - inicializa o DMAC e manda os primeiros pacotes ao VIF0/VIF1/GIF; cria 11 threads.
-  Para na inicialização do PS2RNA da CRI (`0x264710`), que espera o módulo `CRI_ADXI.IRX` do IOP.
+- Milestone 0 (setup): the build is identical to the original; 327 library functions named.
+- Milestone 1: all 13,855 functions are translated to C (`tools/recomp/recomp.py`) and compile.
+- Milestone 2: `build/sstheh` runs crt0, the SDK's start-up and `main`: the allocator, SIF/RPC with the IOP
+  HLE, the IOP reboot (IOPRP280), CD/DVD (libcdvd replaced by ISO reads), the IOP modules, the DMAC and the
+  first VIF/GIF packets.
+- Milestone 4 (first picture), 2026-10-13: DMAC, VIF1, GIF and a software GS (adapted from
+  Tenkaichi3Decomp); SDL3 window; `--shot N,M` saves screenshots in `build/`.
+- Milestones 5 and 6, 2026-10-14: Vulkan renderer, VU1 JIT, PADMAN, CRI ADX music and voices, memory card.
+- Sound effects, 2026-10-14: SSD.IRX and RSSD.IRX run as they are on an interpreted IOP, with native system
+  modules and an emulated SPU2 (`port/iop/lle/`). IOP → EE calls wait for the EE's RPC_END before the next one.
 
-- Marco 4 (primeira imagem): **concluído em 2026-10-13**. DMAC, VIF1, GIF e GS em software
-  (`port/gs/`, adaptado do Tenkaichi3Decomp); janela SDL3; `--shot N,M` salva capturas em `build/`.
-  O jogo mostra a tela "Select your language".
-
-## Próximos passos (antigos)
-
-1. **CRI ADXI** (servidor `0x90000200`): simular o lado IOP do ADX o suficiente para o PS2RNA iniciar;
-   depois, áudio de verdade (o `snd_adx.c` do Tenkaichi3Decomp decodifica ADX).
-2. **DMAC + GIF/VIF + GS**: trazer o renderer do Tenkaichi3Decomp (`port/src/gs`, MIT) e ligar às escritas
-   nos registradores de DMA; interpretador de VU1 para os 62 programas.
-3. **DBC / controle** (`0x80001300`, `0x8000131B/C`): devolver o estado do controle a partir do SDL.
-4. **RSSD** (som do jogo, `0x900`/`0x901`): reimplementar o protocolo.
-
-Ferramentas: `tools/recon/xref.py` (quem usa uma string, quem chama uma função), `port/hle.txt` (substituir
-funções do jogo por nativas), `./build/sstheh -v` (log detalhado).
-
-Rodar: `.venv/bin/python configure.py && ninja port && ./build/sstheh`
+Tools: `tools/recon/xref.py` (who uses a string, who calls a function), `port/hle.txt` (replace game
+functions with native ones), `./build/sstheh -v` (detailed log).
