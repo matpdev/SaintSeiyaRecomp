@@ -40,27 +40,35 @@ jogo está neste repositório. A tradução brasileira de fãs é outro build (c
 - o GCC também é usado **enquanto o jogo roda**: os programas de VU1 são compilados para código nativo na primeira
   vez que aparecem e guardados em `~/.cache/sstheh/vu` (os primeiros segundos de cada efeito novo podem engasgar)
 
-### 2. Arquivos do seu disco
+### 2. Compilar e jogar
 
-Faça uma imagem ISO do seu disco (por exemplo com `dd if=/dev/sr0 of=game.iso` ou o programa que preferir) e
-copie o executável de dentro dela:
+Faça uma imagem ISO do seu disco (por exemplo com `dd if=/dev/sr0 of=game.iso` ou o programa que preferir) e:
 
 ```sh
 git clone <este repositório> SaintSeiyaDecomp && cd SaintSeiyaDecomp
+./compilar.sh /caminho/para/game.iso   # sem argumento, abre uma janela para escolher a ISO
+./jogar.sh                             # abre o jogo (e recompila sozinho se o código mudar)
+./jogar.sh --atalho                    # opcional: ícone no menu de aplicativos
+```
+
+O `compilar.sh` confere as dependências (e diz o comando para instalar o que faltar), valida a ISO pelo SHA-1 do
+executável, prepara `disc/`, cria o ambiente Python em `.venv` e gera `build/sstheh`. A primeira compilação leva
+alguns minutos. `./compilar.sh --limpar` refaz tudo do zero.
+
+<details><summary>Passo a passo manual (o que os scripts fazem)</summary>
+
+```sh
 cp /caminho/para/game.iso disc/game.iso          # ou: ln -s /caminho/para/game.iso disc/game.iso
 7z e disc/game.iso SLES_541.62 -odisc/           # ou: bsdtar -xf disc/game.iso -C disc SLES_541.62
 sha1sum disc/SLES_541.62                         # deve dar 7ba6b0a1c05a94f28452840fcb73c204e46e79e6
-```
-
-### 3. Compilar e rodar
-
-```sh
 python3 -m venv .venv
 .venv/bin/pip install 'splat64[mips]' spimdisasm rabbitizer ninja-syntax pyyaml pyelftools ninja
 .venv/bin/python configure.py                    # roda o splat e gera build.ninja
-PATH=$PWD/.venv/bin:$PATH ninja port             # gera build/sstheh (a primeira vez leva alguns minutos)
+PATH=$PWD/.venv/bin:$PATH ninja port             # gera build/sstheh
 ./build/sstheh                                   # rode de dentro da pasta do repositório
 ```
+
+</details>
 
 Na primeira execução o jogo pede o idioma e avisa que não há save no memory card. Para salvar: Options → Save/Load
 (responda "Yes" para criar o save). O memory card do slot 1 é a pasta `~/.local/share/sstheh/memcard1`: o save fica
