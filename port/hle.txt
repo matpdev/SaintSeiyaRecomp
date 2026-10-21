@@ -32,3 +32,5 @@
 0x00135578 hle_mc2_chmod
 0x00133320 hle_mc2_lookup
 0x001374F0 hle_mc2_request
+# Functions that run a native function on entry and then their own code: address native_function before
+0x002A0E50 hle_widescreen_view before   # camera set_view_screen: ax * 3/4 for 16:9, see port/hle/widescreen.c

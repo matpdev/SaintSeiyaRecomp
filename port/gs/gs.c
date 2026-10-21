@@ -673,6 +673,9 @@ static u32 tex_alloc(u32 w, u32 h) {
 u32 gpu_tex_stats(u64 *bytes) { *bytes = tex_bytes; return GPU_MAX_TEX - 1 - ntex_free; }
 
 static void transfer_flush(void);
+u64 texpack_name(const u32 *px, u32 w, u32 h);                 /* texpack.c */
+void texpack_dump(u64 name, const u32 *px, u32 w, u32 h);
+u32 *texpack_find(u64 name, u32 *w, u32 *h);
 
 static s32 texture_for(int ctx, u32 *w_out, u32 *h_out) {
     transfer_flush();
@@ -718,10 +721,22 @@ static s32 texture_for(int ctx, u32 *w_out, u32 *h_out) {
                 }
                 px[y * tw + x] = c;
             }
+        /* texture packs (texpack.c): saved, or replaced by a PNG of any size (draws keep using
+           the original's size in texels) */
+        u64 name = texpack_name(px, tw, th);
+        texpack_dump(name, px, tw, th);
+        u32 uw = tw, uh = th, *rp = texpack_find(name, &uw, &uh);
+        if (rp) {
+            free(px);
+            px = rp;
+            tex_bytes += ((u64)uw * uh - (u64)tw * th) * 4;
+            tex_ents[idx].w = uw;
+            tex_ents[idx].h = uh;
+        }
         memcpy(tex_ents[idx].ckey, ckey, sizeof ckey);
         *cs = idx;
         GROW(rec->uploads, rec->nuploads, rec->cap_uploads, GpuTexUpload);
-        rec->uploads[rec->nuploads++] = (GpuTexUpload){idx, tw, th, px};
+        rec->uploads[rec->nuploads++] = (GpuTexUpload){idx, uw, uh, px};
     }
     tex_ents[idx].last = rec_frame;
     memcpy(f->key, key, sizeof key);
@@ -742,6 +757,8 @@ static void put_vertex(const Vertex *v, u32 z_shift, const Vertex *colour_of, in
     else { o->s = v->s; o->t = v->t; o->q = v->q; }
     o->_p0 = o->_p1 = 0;
 }
+
+static int gs_cur_path;             /* GIF path of the data being interpreted (1..3) */
 
 /* One primitive (points become 1-pixel quads, lines 1-pixel-wide quads, sprites two triangles). */
 static void record(int ctx, int type, const Vertex *v) {
@@ -819,6 +836,20 @@ static void record(int ctx, int type, const Vertex *v) {
     }
     }
     d->count = rec->nverts - d->first;
+    /* For widescreen. 2D on the screen: drawn from the EE (path 2/3; the 3D comes from VU1), whole
+       triangles or sprites over the whole frame width (the scissor), not from a render target
+       (post effects) and not untextured over the whole width (fades, clears). A picture at the
+       sides: anything else textured, or 3D, reaching outside the middle 3/4 of the frame width. */
+    float x0 = 1e9f, x1 = -1e9f;
+    for (u32 i = d->first; i < rec->nverts; i++) {
+        if (rec->verts[i].x < x0) x0 = rec->verts[i].x;
+        if (rec->verts[i].x > x1) x1 = rec->verts[i].x;
+    }
+    u32 fw = d->fbw * 64;
+    int full_scissor = d->scissor[0] == 0 && d->scissor[1] + 1 >= fw;
+    if (gs_cur_path != 1 && type >= 3 && d->tex >= -1 && full_scissor)
+        d->flat2d = d->textured || x0 > 0 || x1 < (float)fw;
+    d->sides = !d->flat2d && (d->tex >= 0 || gs_cur_path == 1) && full_scissor && (x0 < fw / 8.0f || x1 > fw * 7 / 8.0f);
     rec->ndraws++;
     rt_fbp[d->fbp & 511] = 1;
     pthread_mutex_unlock(&rec_lock);
@@ -1015,6 +1046,7 @@ static u64 gif_tags;
 static u32 gif(GifState *st, const u8 *p, u32 qwc, int stop_at_eop) {
     const u64 *q = (const u64 *)p;
     u32 used = 0;
+    gs_cur_path = (int)(st - paths) + 1;
     while (used < qwc) {
         if (st->loops == 0) {
             if (stop_at_eop && st->tag_lo && ((st->tag_lo >> 15) & 1)) { st->tag_lo = 0; return used; }

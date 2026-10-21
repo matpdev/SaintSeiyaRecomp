@@ -84,6 +84,8 @@ em `BESLES-54162GX/` e é carregado sozinho quando o jogo abre.
 | Z / X / A / S | ✕ / ○ / □ / △ |
 | Q / W / E / R | L1 / R1 / L2 / R2 |
 | Enter / Backspace | Start / Select |
+| F1 | tamanho da janela: 1280×720, 1600×900, 1920×1080, … (os que cabem na tela), depois tela cheia; fica salvo |
+| F2 | widescreen 16:9 (padrão) ou o 4:3 original; fica salvo |
 | F3 | painel de desempenho (fps da lógica e da tela, uso de CPU) |
 | F4 | liga/desliga o vsync |
 
@@ -97,7 +99,12 @@ indicados, sem janela). Variáveis de ambiente:
 | Variável | Efeito |
 |---|---|
 | `SSTHEH_VSYNC=1` | começa com vsync (padrão: sem limite de fps) |
-| `SSTHEH_SCALE=n` | escala de renderização fixa (1 a 8; padrão: pela resolução da tela, até 4) |
+| `SSTHEH_WINDOW=LxA` | tamanho da janela ao abrir, ex. `2560x1440`, ou `full` (padrão: 1920x1080, ou o último escolhido com F1) |
+| `SSTHEH_WIDESCREEN=0` | imagem 4:3 original (padrão: 16:9, o 3D com visão mais larga e menus e HUD nas proporções 4:3; artes 4:3 de tela cheia ganham laterais desfocadas) |
+| `SSTHEH_SHOT_PRESENT=LxA` | o `--shot` salva a imagem como uma janela desse tamanho mostra (widescreen, laterais) em vez do quadro do PS2 |
+| `SSTHEH_TEX_DUMP=1` | salva cada textura que o jogo usa como PNG em `~/.local/share/sstheh/textures/dump/` |
+| `SSTHEH_TEXTURES=0` | não usa texturas substitutas (`~/.local/share/sstheh/textures/<nome>.png`, de qualquer tamanho; `tools/upscale_textures.sh` gera um pacote HD com o Real-ESRGAN) |
+| `SSTHEH_SCALE=n` | escala de renderização fixa (1 a 8; padrão: acompanha o tamanho da janela — 4 em 1080p, 5 em 4K) |
 | `SSTHEH_INTERP=0` | sem quadros interpolados (mostra só os quadros do jogo) |
 | `SSTHEH_50HZ=1` | modo PAL original (50 Hz) |
 | `SSTHEH_30FPS_SCENES=1` | menus e telas 2D a 30 fps, como no disco |

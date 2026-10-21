@@ -1,7 +1,7 @@
 #version 450
 // The displayed picture scaled to the window. When the picture is larger than the window
 // (rendered at a higher resolution), each window pixel averages taps x taps samples spread over
-// the area it covers: supersampling.
+// the area it covers: supersampling. The same with a wide area makes the blurred widescreen sides.
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 out_color;
 layout(set = 2, binding = 0) uniform sampler2D src;

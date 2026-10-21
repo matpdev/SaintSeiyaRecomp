@@ -32,6 +32,8 @@ typedef struct {
     float region[4];            /* region clamp in texels, region[0] < 0: none */
     u32 scissor[4];             /* x0, x1, y0, y1 inclusive */
     u32 fba;
+    u32 flat2d;                 /* 2D on the screen (menus, HUD): kept 4:3 in widescreen */
+    u32 sides;                  /* draws a picture (not 2D, a clear or a post effect) at the 16:9 sides */
     u32 first, count;           /* vertices */
 } GpuDraw;
 
@@ -55,6 +57,8 @@ typedef struct {
 } GpuFrame;
 
 extern int gpu_on;              /* the GPU renderer records instead of rasterising */
+int widescreen_on(void);        /* 16:9 (port/hle/widescreen.c) */
+void widescreen_toggle(void);
 
 /* gs.c. A frame is sealed when the game shows a new picture (the GS's thread, in order);
    the window's thread takes sealed frames (oldest first, NULL: none) and gives them back. */
@@ -73,3 +77,4 @@ void gpu_present(void);
 void gpu_set_vsync(int on);                       /* wait for the screen, or show pictures as fast as made */
 int gpu_vsync(void);                          /* show the displayed buffer in the window */
 int gpu_read_display(u32 *out, int max_w, int max_h, int *w, int *h);   /* for --shot */
+int gpu_read_presented(u32 *out, int w, int h);  /* for --shot: as a window w x h shows it */

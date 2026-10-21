@@ -20,6 +20,7 @@
 #include "perf.h"
 #include "gpu.h"
 #include <sys/resource.h>
+#include <sys/stat.h>
 
 void gpu_set_overlay(const u32 *px, int w, int h);   /* gpu_vk.c */
 
@@ -185,11 +186,25 @@ int display_shots(const int *at, int n) {
         }
         int w, h;
         gpu_vblank();
-        if (gpu_on) gpu_read_display(frame, 1024, 1024, &w, &h);
+        static u32 *full;
+        u32 *px = frame;
+        int pw, ph;
+        if (gpu_on && getenv("SSTHEH_SHOT_PRESENT") && sscanf(getenv("SSTHEH_SHOT_PRESENT"), "%dx%d", &pw, &ph) == 2
+            && pw > 0 && ph > 0 && pw <= 4096 && ph <= 4096) {
+            if (!full) full = malloc(4096 * 4096 * 4);
+            px = full;
+            gpu_read_presented(px, pw, ph);
+            w = pw;
+            h = ph;
+        } else if (gpu_on && getenv("SSTHEH_SHOT_FULL")) {
+            if (!full) full = malloc(4096 * 4096 * 4);
+            px = full;
+            gpu_read_display(px, 4096, 4096, &w, &h);
+        } else if (gpu_on) gpu_read_display(frame, 1024, 1024, &w, &h);
         else gs_display(frame, 1024, 1024, &w, &h);
         char path[64];
         snprintf(path, sizeof path, "build/shot_%04d.ppm", at[k]);
-        save_ppm(path, frame, w, h);
+        save_ppm(path, px, w, h);
         if (getenv("SSTHEH_VRAM")) {
             void gs_dump_vram(u32 *out);
             gs_dump_vram(frame);
@@ -211,6 +226,83 @@ int display_shots(const int *at, int n) {
 
 /* ---- performance panel (F3): refreshed once a second */
 typedef struct { char line[4][96]; } Panel;
+/* Window size: 1920 x 1080 unless SSTHEH_WINDOW=WxH or =full says otherwise, or F1 chose another
+   (kept in ~/.local/share/sstheh/window). F1 goes through the sizes that fit the screen, then full
+   screen. w 0: full screen. */
+typedef struct { int w, h; } WinSize;
+static const WinSize win_sizes[] = {{1280, 720}, {1600, 900}, {1920, 1080}, {2560, 1440}, {3840, 2160}, {0, 0}};
+static WinSize win_size = {1920, 1080};
+
+/* ~/.local/share/sstheh/<name>: settings chosen with the F keys */
+void display_config_path(char *p, size_t n, const char *name) {
+    const char *d = getenv("XDG_DATA_HOME"), *h = getenv("HOME");
+    char base[1024];
+    if (d && *d) snprintf(base, sizeof base, "%s", d);
+    else snprintf(base, sizeof base, "%s/.local/share", h ? h : "/tmp");
+    mkdir(base, 0755);
+    snprintf(p, n, "%s/sstheh", base);
+    mkdir(p, 0755);
+    snprintf(p + strlen(p), n - strlen(p), "/%s", name);
+}
+
+static int win_size_parse(const char *s, WinSize *ws) {
+    int w, h;
+    if (!strncmp(s, "full", 4)) { *ws = (WinSize){0, 0}; return 1; }
+    if (sscanf(s, "%dx%d", &w, &h) == 2 && w >= 320 && h >= 240 && w <= 16384 && h <= 16384) { *ws = (WinSize){w, h}; return 1; }
+    return 0;
+}
+
+static void win_size_load(void) {
+    const char *e = getenv("SSTHEH_WINDOW");
+    if (e && win_size_parse(e, &win_size)) return;
+    char path[1100], buf[32] = "";
+    display_config_path(path, sizeof path, "window");
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    if (fgets(buf, sizeof buf, f)) win_size_parse(buf, &win_size);
+    fclose(f);
+}
+
+static void win_size_apply(SDL_Window *win) {
+    if (!win_size.w) { SDL_SetWindowFullscreen(win, true); return; }
+    SDL_SetWindowFullscreen(win, false);
+    SDL_SetWindowSize(win, win_size.w, win_size.h);
+    SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+}
+
+/* F1: the next size up that fits the screen, then full screen, then the smallest again. */
+static void win_size_next(SDL_Window *win) {
+    const SDL_DisplayMode *m = SDL_GetDesktopDisplayMode(SDL_GetDisplayForWindow(win));
+    int n = sizeof win_sizes / sizeof *win_sizes, i;
+    long cur = win_size.w ? (long)win_size.w * win_size.h : -1;
+    if (cur < 0) i = 0;
+    else {
+        for (i = 0; i < n - 1; i++)
+            if ((long)win_sizes[i].w * win_sizes[i].h > cur) break;
+    }
+    while (i < n - 1 && m && (win_sizes[i].w > m->w || win_sizes[i].h > m->h)) i = n - 1;
+    win_size = win_sizes[i];
+    win_size_apply(win);
+    char path[1100];
+    display_config_path(path, sizeof path, "window");
+    FILE *f = fopen(path, "w");
+    if (f) {
+        if (win_size.w) fprintf(f, "%dx%d\n", win_size.w, win_size.h);
+        else fprintf(f, "full\n");
+        fclose(f);
+    }
+    if (win_size.w) rt_log("display", "window %dx%d", win_size.w, win_size.h);
+    else rt_log("display", "full screen");
+}
+
+static SDL_Window *win_create(void) {
+    win_size_load();
+    SDL_Window *win = SDL_CreateWindow("Saint Seiya: The Hades", win_size.w ? win_size.w : 1920,
+                                       win_size.w ? win_size.h : 1080, SDL_WINDOW_RESIZABLE);
+    if (win && !win_size.w) SDL_SetWindowFullscreen(win, true);
+    return win;
+}
+
 static Panel panel;
 static int panel_on = 1;
 /* (VU1 time includes the XGKICKs it makes, which gs_ns counts too) */
@@ -256,7 +348,10 @@ static void panel_update(void) {
              (upload_written - wr0 + upload_skipped - sk0) / dt, (upload_skipped - sk0) / dt);
     sk0 = upload_skipped;
     wr0 = upload_written;
-    snprintf(panel.line[3], 96, "F3: hide  F4: vsync %s", gpu_on && gpu_vsync() ? "on" : "off");
+    char size[24];
+    if (win_size.w) snprintf(size, sizeof size, "%dx%d", win_size.w, win_size.h);
+    else snprintf(size, sizeof size, "full screen");
+    snprintf(panel.line[3], 96, "F1: %s  F2: %s  F3: hide  F4: vsync %s", size, widescreen_on() ? "16:9" : "4:3", gpu_on && gpu_vsync() ? "on" : "off");
     if (getenv("SSTHEH_PERF_LOG")) {
         struct mallinfo2 mi = mallinfo2();
         fprintf(stderr, "[perf %5u] %s | %s | %s | heap %zu MB mmap %zu MB\n", kernel_vblank_count(), panel.line[0], panel.line[1],
@@ -297,7 +392,7 @@ static void overlay_update(void) {
  * with vsync: SSTHEH_VSYNC=1 or F4), show the game's newest frame, moved part of the way from the one before
  * it by the time since it came (SSTHEH_INTERP=0: the newest frame as it is). */
 static int display_window_gpu(void) {
-    SDL_Window *win = SDL_CreateWindow("Saint Seiya: The Hades", 1280, 960, SDL_WINDOW_RESIZABLE);
+    SDL_Window *win = win_create();
     if (!win || gpu_init(win)) return -1;
     int interp = !(getenv("SSTHEH_INTERP") && !atoi(getenv("SSTHEH_INTERP")));
     GpuFrame *fa = NULL, *fb = NULL;    /* the frame before, the newest */
@@ -309,6 +404,8 @@ static int display_window_gpu(void) {
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) { SDL_Quit(); _exit(0); }
             if (e.type == SDL_EVENT_GAMEPAD_ADDED && !gamepad) gamepad = SDL_OpenGamepad(e.gdevice.which);
+            if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F1 && !e.key.repeat) win_size_next(win);
+            if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F2 && !e.key.repeat) widescreen_toggle();
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F3) panel_on = !panel_on;
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F4) gpu_set_vsync(!gpu_vsync());
         }
@@ -359,7 +456,7 @@ int display_window(void) {
         gpu_on = 0;
     }
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1; }
-    SDL_Window *win = SDL_CreateWindow("Saint Seiya: The Hades", 1280, 896, SDL_WINDOW_RESIZABLE);
+    SDL_Window *win = win_create();
     SDL_Renderer *ren = SDL_CreateRenderer(win, NULL);
     SDL_Texture *tex = NULL;
     int tw = 0, th = 0;
@@ -369,6 +466,7 @@ int display_window(void) {
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) { SDL_Quit(); _exit(0); }
             if (e.type == SDL_EVENT_GAMEPAD_ADDED && !gamepad) gamepad = SDL_OpenGamepad(e.gdevice.which);
+            if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F1 && !e.key.repeat) win_size_next(win);
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F3) panel_on = !panel_on;
         }
         pad_buttons[0] = keyboard() | gamepad_buttons() | scripted(kernel_vblank_count());
@@ -384,8 +482,17 @@ int display_window(void) {
             th = h;
         }
         SDL_UpdateTexture(tex, NULL, frame, w * 4);
+        SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
         SDL_RenderClear(ren);
-        SDL_RenderTexture(ren, tex, NULL, NULL);
+        SDL_FRect dst;
+        int ww, wh;
+        SDL_GetCurrentRenderOutputSize(ren, &ww, &wh);
+        dst.h = (float)wh;
+        dst.w = ww * 3 < wh * 4 ? (float)ww : wh * 4.0f / 3.0f;     /* 4:3, bars at the sides */
+        if (ww * 3 < wh * 4) dst.h = ww * 3.0f / 4.0f;
+        dst.x = (ww - dst.w) / 2;
+        dst.y = (wh - dst.h) / 2;
+        SDL_RenderTexture(ren, tex, NULL, &dst);
         panel_update();
         panel_draw(ren);
         SDL_RenderPresent(ren);

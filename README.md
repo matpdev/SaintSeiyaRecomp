@@ -86,6 +86,8 @@ Options → Save/Load (answer "Yes" to create the save). The memory card in slot
 | Z / X / A / S | ✕ / ○ / □ / △ |
 | Q / W / E / R | L1 / R1 / L2 / R2 |
 | Enter / Backspace | Start / Select |
+| F1 | window size: 1280×720, 1600×900, 1920×1080, … (the ones that fit the screen), then full screen; remembered |
+| F2 | widescreen 16:9 (default) or the original 4:3; remembered |
 | F3 | performance panel (logic and display fps, CPU use) |
 | F4 | toggles vsync |
 
@@ -99,7 +101,12 @@ vertical blanks, no window). Environment variables:
 | Variable | Effect |
 |---|---|
 | `SSTHEH_VSYNC=1` | start with vsync (default: no fps limit) |
-| `SSTHEH_SCALE=n` | fixed render scale (1 to 8; default: from the screen resolution, up to 4) |
+| `SSTHEH_WINDOW=WxH` | window size at start, e.g. `2560x1440`, or `full` (default: 1920x1080, or the last one chosen with F1) |
+| `SSTHEH_WIDESCREEN=0` | original 4:3 picture (default: 16:9, a wider 3D view with menus and HUD kept in their 4:3 shapes; full-screen 4:3 art gets blurred sides) |
+| `SSTHEH_SHOT_PRESENT=WxH` | `--shot` saves the picture as a window that size shows it (widescreen, sides) instead of the PS2 frame |
+| `SSTHEH_TEX_DUMP=1` | save every texture the game uses as PNG in `~/.local/share/sstheh/textures/dump/` |
+| `SSTHEH_TEXTURES=0` | don't use replacement textures (`~/.local/share/sstheh/textures/<name>.png`, any size; `tools/upscale_textures.sh` makes an HD pack with Real-ESRGAN) |
+| `SSTHEH_SCALE=n` | fixed render scale (1 to 8; default: follows the window size — 4 at 1080p, 5 at 4K) |
 | `SSTHEH_INTERP=0` | no interpolated frames (only the game's own) |
 | `SSTHEH_50HZ=1` | original PAL mode (50 Hz) |
 | `SSTHEH_30FPS_SCENES=1` | menus and 2D screens at 30 fps, as on the disc |
