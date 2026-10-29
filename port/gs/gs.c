@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <immintrin.h>
 
 #include "r5900.h"
 #include "runtime.h"
@@ -77,6 +78,9 @@ static u16 col4[16][32];
  * pixels of 32 bits, 64 x 64 of 16, 128 x 64 of 8, 128 x 128 of 4. The depth formats are the
  * colour formats with the blocks of a page in another order (block number ^ 0x18). */
 static u16 in32[2][32][64], in16[4][64][64], in8[64][128], in4[128][128];
+/* PSMT8: the 16 x 4 pixels of a column are 64 bytes in a row of memory. col8_shuf[odd column][16 output
+ * bytes][source row]: pshufb masks taking the column's bytes from its four rows of 16 pixels. */
+static __m128i col8_shuf[2][4][4];
 
 static void tables_init(void) {
     for (int y = 0; y < 16; y++) {
@@ -96,6 +100,17 @@ static void tables_init(void) {
     }
     for (int y = 0; y < 64; y++)
         for (int x = 0; x < 128; x++) in8[y][x] = (u16)((kBlock32[(y >> 4) & 3][(x >> 4) & 7] << 8) + col8[y & 15][x & 15]);
+    for (int odd = 0; odd < 2; odd++) {
+        u8 m[4][4][16];
+        memset(m, 0x80, sizeof m);
+        for (int r = 0; r < 4; r++)
+            for (int x = 0; x < 16; x++) {
+                int out = col8[odd * 4 + r][x] - odd * 64;          /* 0..63 inside the column */
+                m[out >> 4][r][out & 15] = (u8)x;
+            }
+        for (int k = 0; k < 4; k++)
+            for (int r = 0; r < 4; r++) col8_shuf[odd][k][r] = _mm_loadu_si128((const __m128i *)m[k][r]);
+    }
     for (int y = 0; y < 128; y++)
         for (int x = 0; x < 128; x++) in4[y][x] = (u16)((kBlock16[(y >> 4) & 7][(x >> 5) & 3] << 9) + col4[y & 15][x & 31]);
 }
@@ -541,9 +556,36 @@ static void frames_init(void) {
 u64 gs_priv_read(u32 off);
 u32 kernel_vblank_count(void);
 
+/* SSTHEH_FRAME_LOG=file: a line per game frame (CSV), with what happened since the one before:
+ * time, VU1 time and its interpreted part, VU1 programs compiled / loaded from disk, GPU pipelines
+ * made. To find what makes a frame late. */
+static void frame_log(void) {
+    static FILE *f;
+    static int on = -1;
+    static u64 t0, vu0, vi0, gs0, jq0, jc0, pp0, pn0, lk0, ln0, hp0;
+    if (on < 0) {
+        const char *path = getenv("SSTHEH_FRAME_LOG");
+        on = path && (f = fopen(path, "w"));
+        if (on) fprintf(f, "vblank,ms,vu_ms,vu_interp_ms,gs_ms,jit_queued,jit_cached,pipes,pipe_ms,lookups,lookup_ms,hops\n");
+    }
+    if (!on) return;
+    u64 now = perf_now();
+    if (t0)
+        fprintf(f, "%u,%.2f,%.2f,%.2f,%.2f,%llu,%llu,%llu,%.2f,%llu,%.2f,%llu\n", kernel_vblank_count(), (now - t0) / 1e6,
+                (perf.vu_ns - vu0) / 1e6, (perf.vu_interp_ns - vi0) / 1e6, (perf.gs_ns - gs0) / 1e6,
+                (unsigned long long)(perf.jit_queued - jq0), (unsigned long long)(perf.jit_cached - jc0),
+                (unsigned long long)(perf.pipes - pp0), (perf.pipe_ns - pn0) / 1e6,
+                (unsigned long long)(perf.jit_lookups - lk0), (perf.jit_lookup_ns - ln0) / 1e6,
+                (unsigned long long)(perf.jit_hops - hp0));
+    t0 = now; vu0 = perf.vu_ns; vi0 = perf.vu_interp_ns; gs0 = perf.gs_ns;
+    jq0 = perf.jit_queued; jc0 = perf.jit_cached; pp0 = perf.pipes; pn0 = perf.pipe_ns;
+    lk0 = perf.jit_lookups; ln0 = perf.jit_lookup_ns; hp0 = perf.jit_hops;
+}
+
 static void seal_locked(void) {
     frames_init();
     if (!rec->ndraws || nsealed == NFRAMES || !nfree) return;
+    frame_log();
     static const u32 regs[5] = {0x0000, 0x0070, 0x0080, 0x0090, 0x00A0};
     for (int k = 0; k < 5; k++) rec->priv[k] = gs_priv_read(regs[k]);
     rec->seq = rec_frame;
@@ -614,17 +656,28 @@ static u64 pages_version(u32 first, u32 n) {
     return h;
 }
 
+/* A hash of n bytes (a multiple of 32) in four independent lanes, so the multiplications overlap. */
+static inline u64 rotl64(u64 x, int k) { return x << k | x >> (64 - k); }
+
+static u64 hash_lanes(const u8 *p, u32 n, u64 seed) {
+    u64 a = seed, b = seed ^ 0xC2B2AE3D27D4EB4Full, c = seed ^ 0x165667B19E3779F9ull, d = seed ^ 0x27D4EB2F165667C5ull;
+    for (u32 i = 0; i < n; i += 32) {
+        u64 w[4];
+        memcpy(w, p + i, 32);
+        a = rotl64((a ^ w[0]) * 0x9E3779B97F4A7C15ull, 31);
+        b = rotl64((b ^ w[1]) * 0xFF51AFD7ED558CCDull, 29);
+        c = rotl64((c ^ w[2]) * 0xC4CEB9FE1A85EC53ull, 31);
+        d = rotl64((d ^ w[3]) * 0x100000001B3ull, 27);
+    }
+    u64 h = a ^ rotl64(b, 17) ^ rotl64(c, 31) ^ rotl64(d, 47);
+    h = (h ^ h >> 33) * 0xFF51AFD7ED558CCDull;
+    return h ^ h >> 29;
+}
+
 static u64 pages_hash(u32 first, u32 n) {
     u64 h = 0x9E3779B97F4A7C15ull ^ n;
-    for (u32 pg = first; pg < first + n; pg++) {
-        const u64 *w = (const u64 *)&vram[(pg & 511) * 2048];
-        u64 a = h, b = h ^ 0xC2B2AE3D27D4EB4Full;
-        for (int i = 0; i < 1024; i += 2) {
-            a = (a ^ w[i]) * 0x100000001B3ull;
-            b = (b ^ w[i + 1]) * 0xFF51AFD7ED558CCDull;
-        }
-        h = (h ^ a ^ (b >> 29)) * 0x9E3779B97F4A7C15ull ^ pg;
-    }
+    for (u32 pg = first; pg < first + n; pg++)
+        h = (h ^ hash_lanes((const u8 *)&vram[(pg & 511) * 2048], 8192, h)) * 0x9E3779B97F4A7C15ull ^ pg;
     return h;
 }
 
@@ -885,12 +938,50 @@ static void transfer_begin(void) {
     if (dir == 2) local_to_local();
 }
 
+/* The blocks an image upload may write: from the start of the row of pages holding its first line
+ * to past its last line (a page row of slack); first block and count. */
+static void transfer_blocks(u32 *first, u32 *count) {
+    u32 dbp = (gs.bitbltbuf >> 32) & 0x3FFF, dbw = (gs.bitbltbuf >> 48) & 0x3F, dpsm = (gs.bitbltbuf >> 56) & 0x3F;
+    u32 bw = dbw ? dbw : 1, bits = (u32)psm_bits(dpsm);
+    u32 page_h = bits >= 24 ? 32 : bits == 4 ? 128 : 64, pages_per_row = bits >= 16 ? bw : (bw + 1) / 2;
+    u32 end = (bw * 64 * (gs.ty + gs.th + 64) * bits / 8 + 255) / 256, skip = gs.ty / page_h * pages_per_row * 32;
+    if (skip > end) skip = end;
+    *first = dbp + skip;
+    *count = end - skip;
+}
+
 static void transfer_write(const u8 *p, u32 bytes) {
     if (!gs.transfer || gs.tw == 0) return;
     u32 dbp = (gs.bitbltbuf >> 32) & 0x3FFF, dbw = (gs.bitbltbuf >> 48) & 0x3F, dpsm = (gs.bitbltbuf >> 56) & 0x3F;
-    pages_written(dbp, ((dbw ? dbw : 1) * 64 * (gs.ty + gs.th + 64) * (u32)psm_bits(dpsm) / 8 + 255) / 256);
+    {
+        u32 first, count;
+        transfer_blocks(&first, &count);
+        pages_written(first, count);
+    }
     u32 bits = (u32)psm_bits(dpsm), total = gs.tw * gs.th;
     u32 i = 0;
+    if (dpsm == 0x13 && gs.tpos == 0 && bytes >= total && (dbw & 1) == 0 && dbw
+        && !(gs.tx & 15) && !(gs.ty & 3) && !(gs.tw & 15) && !(gs.th & 3)) {
+        /* a whole 8-bit image in whole columns: each 16 x 4 column at once */
+        u8 *v8 = (u8 *)vram;
+        for (u32 ry = 0; ry < gs.th; ry += 4) {
+            u32 y = gs.ty + ry;
+            const u8 *row = p + ry * gs.tw;
+            const __m128i *shuf = col8_shuf[(y >> 2) & 1][0];
+            for (u32 rx = 0; rx < gs.tw; rx += 16) {
+                u32 x = gs.tx + rx;
+                u32 a = ((dbp + (y >> 6) * 32 * (dbw >> 1) + (x >> 7) * 32 + kBlock32[(y >> 4) & 3][(x >> 4) & 7]) << 8) + ((y >> 2) & 3) * 64;
+                __m128i r0 = _mm_loadu_si128((const __m128i *)(row + rx)), r1 = _mm_loadu_si128((const __m128i *)(row + gs.tw + rx));
+                __m128i r2 = _mm_loadu_si128((const __m128i *)(row + 2 * gs.tw + rx)), r3 = _mm_loadu_si128((const __m128i *)(row + 3 * gs.tw + rx));
+                __m128i *d = (__m128i *)(v8 + (a & 0x3FFFFF));
+                for (int k = 0; k < 4; k++)
+                    _mm_storeu_si128(d + k, _mm_or_si128(_mm_or_si128(_mm_shuffle_epi8(r0, shuf[k * 4]), _mm_shuffle_epi8(r1, shuf[k * 4 + 1])),
+                                                         _mm_or_si128(_mm_shuffle_epi8(r2, shuf[k * 4 + 2]), _mm_shuffle_epi8(r3, shuf[k * 4 + 3]))));
+            }
+        }
+        gs.tpos = total;
+        return;
+    }
     if (dpsm == 0x00 || dpsm == 0x02 || dpsm == 0x0A || dpsm == 0x13 || dpsm == 0x14) {
         /* whole runs of a row with the page tables (textures are uploaded again every frame) */
         u32 bw = dbw ? dbw : 1, count = bytes * 8 / bits;
@@ -946,18 +1037,17 @@ static Upload uploads_seen[1024];
 u64 upload_skipped, upload_written;
 
 static u64 hash_bytes(const u8 *p, u32 n) {
-    u64 h = 0xCBF29CE484222325ull ^ n;
-    u32 i = 0;
-    for (; i + 8 <= n; i += 8) { u64 w; memcpy(&w, p + i, 8); h = (h ^ w) * 0x100000001B3ull; h ^= h >> 29; }
-    for (; i < n; i++) h = (h ^ p[i]) * 0x100000001B3ull;
+    u32 whole = n & ~31u;
+    u64 h = hash_lanes(p, whole, 0xCBF29CE484222325ull ^ n);
+    for (u32 i = whole; i < n; i++) h = (h ^ p[i]) * 0x100000001B3ull;
     return h;
 }
 
 static void upload_pages(u32 *first, u32 *n) {
-    u32 dbp = (gs.bitbltbuf >> 32) & 0x3FFF, dbw = (gs.bitbltbuf >> 48) & 0x3F, dpsm = (gs.bitbltbuf >> 56) & 0x3F;
-    u32 blocks = ((dbw ? dbw : 1) * 64 * (gs.ty + gs.th + 64) * (u32)psm_bits(dpsm) / 8 + 255) / 256;
-    *first = dbp / 32;
-    *n = (dbp + blocks) / 32 - dbp / 32 + 1;
+    u32 bp, blocks;
+    transfer_blocks(&bp, &blocks);
+    *first = bp / 32;
+    *n = (bp + blocks) / 32 - bp / 32 + 1;
     if (*n > 512) *n = 512;
 }
 
@@ -1158,19 +1248,19 @@ void gif_path1(const u8 *vu_mem, u32 addr) {
     paths[0].loops = 0;
     u64 t = perf_stamp();
     gif(&paths[0], buf, 0x400, 1);
-    if (t) perf.gs_ns += perf_now() - t;
+    if (t) perf.gs_ns += perf_since(t);
 }
 
 void gif_path2(const u8 *data, u32 qwc) {
     u64 t = perf_stamp();
     gif(&paths[1], data, qwc, 0);
-    if (t) perf.gs_ns += perf_now() - t;
+    if (t) perf.gs_ns += perf_since(t);
 }
 
 void gif_dma(const u8 *data, u32 qwc) {
     u64 t = perf_stamp();
     gif(&paths[2], data, qwc, 0);
-    if (t) perf.gs_ns += perf_now() - t;
+    if (t) perf.gs_ns += perf_since(t);
 }
 
 /* ------------------------------------------------------------------------------- display */

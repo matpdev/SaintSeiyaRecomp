@@ -29,9 +29,10 @@
 #include "runtime.h"
 #include "vu.h"
 #include "vu_internal.h"
+#include "perf.h"
 
 #define NPAIRS (0x4000 / 8)
-#define GEN_VERSION 3           /* of the C written: part of the keys */
+#define GEN_VERSION 4           /* of the C written: part of the keys */
 
 typedef int (*ProgFn)(Vu *v);
 
@@ -557,8 +558,16 @@ static char *generate(const u8 *code, u32 entry, const u8 *in) {
     put(&s, "%s", LOCAL_STATE_MACROS);
     put(&s, "int vu_prog(Vu *v) {\n    static void *L2[%d];\n    static int init;\n    if (!init) {\n", NPAIRS);
     put(&s, "        for (int k = 0; k < %d; k++) L2[k] = &&out;\n", NPAIRS);
-    for (u32 p = 0; p < NPAIRS; p++)
-        if (in[p]) put(&s, "        L2[%u] = &&p%u;\n", p, p);
+    /* Only the pairs entered through L2 have their address taken: the entry and where BAL / JALR
+     * return (JR's usual targets). Any other JR target leaves through `out` and the caller goes
+     * on from v->pc. With fewer ways in, gcc keeps values in registers across pairs and drops
+     * flags and Q/P updates nobody reads. */
+    put(&s, "        L2[%u] = &&p%u;\n", entry, entry);
+    for (u32 p = 0; p < NPAIRS; p++) {
+        if (!in[p]) continue;
+        u32 lo = rd_word(code, p, 0), hi = rd_word(code, p, 1), op = lo >> 25, r = (p + 2) % NPAIRS;
+        if (!(hi >> 31) && (op == 0x21 || op == 0x25) && in[r] && r != entry) put(&s, "        L2[%u] = &&p%u;\n", r, r);
+    }
     put(&s, "        init = 1;\n    }\n");
     put(&s, "    int taken = 0, ret = 1;\n    u32 target = 0;\n    long guard = 0;\n    __m128 u = _mm_setzero_ps();\n");
     put(&s, "    (void)taken; (void)target; (void)guard; (void)u;\n");
@@ -731,8 +740,10 @@ static ProgFn find(Vu *v) {
         return p && __atomic_load_n(&p->state, __ATOMIC_ACQUIRE) == 1 ? p->fn : NULL;
     }
     static u8 in[NPAIRS];
+    u64 tl = perf_stamp();
     reach(v->code, entry, in);
     u64 key = prog_key(v->code, entry, in);
+    if (tl) { perf.jit_lookups++; perf.jit_lookup_ns += perf_since(tl); }
     Prog **b = &buckets[key % 4096], *p = *b;
     while (p && p->key != key) p = p->next;
     if (!p) {
@@ -743,8 +754,9 @@ static ProgFn find(Vu *v) {
         *b = p;
         char so_path[PATH_MAX + 32];
         snprintf(so_path, sizeof so_path, "%s/%016llx.so", cache_dir, (unsigned long long)key);
-        if (access(so_path, R_OK) == 0) load(p, so_path);
+        if (access(so_path, R_OK) == 0) { load(p, so_path); perf.jit_cached++; }
         else {
+            perf.jit_queued++;
             p->source = generate(v->code, entry, in);
             pthread_mutex_lock(&qlock);
             if (queue_tail) queue_tail->queue_next = p;
@@ -778,6 +790,7 @@ int vu_jit_run(Vu *v) {
             return 0;
         }
         if (fn(v) == 0) return 1;
+        perf.jit_hops++;
         if (dbg) {
             static u32 told2[0x800];
             if (told2[(v->pc & 0x3FFF) / 8]++ < 3) rt_log("vujit", "program at %03X left at %03X", at, v->pc & 0x3FFF);

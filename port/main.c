@@ -18,6 +18,7 @@
 int cdvd_open(const char *path);
 int display_window(void);
 void prof_start(void);
+void perf_calibrate(void);
 int display_shots(const int *at, int n);
 void display_set_presses(const char *spec);
 
@@ -59,6 +60,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     rt_log("main", "loaded %s, entry %08X", elf, entry);
+    perf_calibrate();
     prof_start();
     {
         extern int gpu_on;

@@ -12,6 +12,7 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <immintrin.h>
 
 #include "r5900.h"
 #include "runtime.h"
@@ -31,40 +32,116 @@ void vu_load_program(int vu, u32 addr, const u32 *words, u32 count) {
     if (changed) vu_code_written(vu, addr & (size - 1), count * 4);   /* the same code again is common */
 }
 
-/* The common case (no mask, MODE 0, CL >= WL): each format copied straight. */
+/* One source vector (not V4-5) as four 32-bit lanes; lanes past VN are zero (V1 broadcasts). */
+static inline __m128i unpack_load(const u8 *src, int vn, int vl, int usn) {
+    __m128i x;
+    switch (vl) {
+    case 0: {
+        u32 w[4] = {0, 0, 0, 0};
+        memcpy(w, src, 4 * (vn + 1));
+        x = _mm_loadu_si128((const __m128i *)w);
+        break;
+    }
+    case 1: {
+        u64 w = 0;
+        memcpy(&w, src, 2 * (vn + 1));
+        x = _mm_cvtsi64_si128((long long)w);
+        x = usn ? _mm_cvtepu16_epi32(x) : _mm_cvtepi16_epi32(x);
+        break;
+    }
+    default: {
+        u32 w = 0;
+        memcpy(&w, src, vn + 1);
+        x = _mm_cvtsi32_si128((int)w);
+        x = usn ? _mm_cvtepu8_epi32(x) : _mm_cvtepi8_epi32(x);
+        break;
+    }
+    }
+    return vn ? x : _mm_shuffle_epi32(x, 0);
+}
+
+/* Each of NUM vectors to its address: CL >= WL, WL written then CL - WL skipped. */
+#define UNPACK_EACH(STEP, BODY) do {                                            \
+        for (u32 n_ = 0, cycle_ = 0; n_ < num; n_++) {                          \
+            __m128i *dst = (__m128i *)(mem + (addr & (qwords - 1)) * 16);       \
+            BODY;                                                               \
+            src += (STEP);                                                      \
+            addr++;                                                             \
+            if (++cycle_ == wl) { addr += cl - wl; cycle_ = 0; }                \
+        }                                                                       \
+    } while (0)
+
+/* The common case (no mask, MODE 0, CL >= WL): a loop per format. */
 static void unpack_fast(u8 *mem, u32 qwords, u32 addr, u32 num, u32 cl, u32 wl, int vn, int vl, int usn, const u8 *src) {
-    u32 cycle = 0;
-    for (u32 n = 0; n < num; n++) {
-        u32 *dst = (u32 *)(mem + (addr % qwords) * 16);
-        switch (vl << 2 | vn) {
-        case 0x3: memcpy(dst, src, 16); src += 16; break;                                       /* V4-32 */
-        case 0x2: memcpy(dst, src, 12); src += 12; break;                                       /* V3-32 */
-        case 0x1: memcpy(dst, src, 8); src += 8; break;                                         /* V2-32 */
-        case 0x0: { u32 x; memcpy(&x, src, 4); dst[0] = dst[1] = dst[2] = dst[3] = x; src += 4; break; }   /* S-32 */
-        case 0x7: case 0x6: case 0x5: case 0x4: {                                               /* 16 bits */
-            const u16 *h = (const u16 *)src;
-            if (vn == 0) { u32 x = usn ? h[0] : (u32)(s32)(s16)h[0]; dst[0] = dst[1] = dst[2] = dst[3] = x; }
-            else for (int k = 0; k <= vn; k++) dst[k] = usn ? h[k] : (u32)(s32)(s16)h[k];
-            src += 2 * (vn + 1);
-            break;
-        }
-        case 0xB: case 0xA: case 0x9: case 0x8: {                                               /* 8 bits */
-            if (vn == 0) { u32 x = usn ? src[0] : (u32)(s32)(s8)src[0]; dst[0] = dst[1] = dst[2] = dst[3] = x; }
-            else for (int k = 0; k <= vn; k++) dst[k] = usn ? src[k] : (u32)(s32)(s8)src[k];
-            src += vn + 1;
-            break;
-        }
-        default: {                                                                              /* V4-5 */
+    switch (vl << 2 | vn) {
+    case 0x3:                                                                               /* V4-32 */
+        if (cl == wl) {                                                                     /* runs up to the end of memory */
+            while (num) {
+                u32 a = addr & (qwords - 1), run = qwords - a < num ? qwords - a : num;
+                memcpy(mem + a * 16, src, run * 16);
+                src += run * 16;
+                addr += run;
+                num -= run;
+            }
+        } else UNPACK_EACH(16, _mm_store_si128(dst, _mm_loadu_si128((const __m128i *)src)));
+        break;
+    case 0x2: UNPACK_EACH(12, memcpy(dst, src, 12)); break;                                 /* V3-32 */
+    case 0x1: UNPACK_EACH(8, memcpy(dst, src, 8)); break;                                   /* V2-32 */
+    case 0x0: UNPACK_EACH(4, _mm_store_si128(dst, unpack_load(src, 0, 0, 0))); break;      /* S-32 */
+    case 0x7:                                                                               /* V4-16 */
+        if (usn) UNPACK_EACH(8, _mm_store_si128(dst, _mm_cvtepu16_epi32(_mm_loadl_epi64((const __m128i *)src))));
+        else UNPACK_EACH(8, _mm_store_si128(dst, _mm_cvtepi16_epi32(_mm_loadl_epi64((const __m128i *)src))));
+        break;
+    case 0xB:                                                                               /* V4-8 */
+        if (usn) UNPACK_EACH(4, { u32 w; memcpy(&w, src, 4); _mm_store_si128(dst, _mm_cvtepu8_epi32(_mm_cvtsi32_si128((int)w))); });
+        else UNPACK_EACH(4, { u32 w; memcpy(&w, src, 4); _mm_store_si128(dst, _mm_cvtepi8_epi32(_mm_cvtsi32_si128((int)w))); });
+        break;
+    case 0x6: case 0x5: case 0x4: case 0xA: case 0x9: case 0x8: {                           /* V1..V3 of 16 / 8 bits */
+        u32 keep = vn ? 0xFu << (vn + 1) : 0;                                              /* components not in the data */
+        __m128i km = _mm_setr_epi32(-(int)((keep >> 0) & 1), -(int)((keep >> 1) & 1), -(int)((keep >> 2) & 1), -(int)((keep >> 3) & 1));
+        u32 step = (vl == 1 ? 2 : 1) * (vn + 1);
+        UNPACK_EACH(step, _mm_store_si128(dst, _mm_blendv_epi8(unpack_load(src, vn, vl, usn), _mm_load_si128(dst), km)));
+        break;
+    }
+    default: {                                                                              /* V4-5 */
+        UNPACK_EACH(2, {
             u16 h;
             memcpy(&h, src, 2);
-            dst[0] = (h & 0x1F) << 3;
-            dst[1] = ((h >> 5) & 0x1F) << 3;
-            dst[2] = ((h >> 10) & 0x1F) << 3;
-            dst[3] = (h >> 15) << 7;
-            src += 2;
-            break;
+            _mm_store_si128(dst, _mm_setr_epi32((h & 0x1F) << 3, ((h >> 5) & 0x1F) << 3, ((h >> 10) & 0x1F) << 3, (h >> 15) << 7));
+        });
+        break;
+    }
+    }
+}
+
+/* With MASK, MODE 0, CL >= WL (not V4-5): each lane from the data, ROW, COL or left alone, as
+   STMASK says for the vector's place in the cycle. */
+static void unpack_masked(u8 *mem, u32 qwords, u32 addr, u32 num, u32 cl, u32 wl, int vn, int vl, int usn,
+                          const u8 *src, const VuUnpack *u) {
+    __m128i dm[4], rm[4], cm[4], km[4], rowv = _mm_loadu_si128((const __m128i *)u->row), colv[4];
+    for (int slot = 0; slot < 4; slot++) {
+        int d[4], r[4], c[4], k[4];
+        for (int l = 0; l < 4; l++) {
+            int how = (u->mask >> (slot * 8 + l * 2)) & 3;
+            if (how == 0 && vn != 0 && l > vn) how = 3;                                     /* component not in the data */
+            d[l] = -(how == 0); r[l] = -(how == 1); c[l] = -(how == 2); k[l] = -(how == 3);
         }
-        }
+        dm[slot] = _mm_setr_epi32(d[0], d[1], d[2], d[3]);
+        rm[slot] = _mm_setr_epi32(r[0], r[1], r[2], r[3]);
+        cm[slot] = _mm_setr_epi32(c[0], c[1], c[2], c[3]);
+        km[slot] = _mm_setr_epi32(k[0], k[1], k[2], k[3]);
+        colv[slot] = _mm_set1_epi32((int)u->col[slot]);
+    }
+    u32 step = (vl == 0 ? 4 : vl == 1 ? 2 : 1) * (vn + 1);
+    for (u32 n = 0, cycle = 0; n < num; n++) {
+        __m128i *dst = (__m128i *)(mem + (addr & (qwords - 1)) * 16);
+        u32 slot = cycle < 4 ? cycle : 3;
+        __m128i x = _mm_and_si128(unpack_load(src, vn, vl, usn), dm[slot]);
+        x = _mm_or_si128(x, _mm_and_si128(rowv, rm[slot]));
+        x = _mm_or_si128(x, _mm_and_si128(colv[slot], cm[slot]));
+        x = _mm_or_si128(x, _mm_and_si128(_mm_load_si128(dst), km[slot]));
+        _mm_store_si128(dst, x);
+        src += step;
         addr++;
         if (++cycle == wl) { addr += cl - wl; cycle = 0; }
     }
@@ -86,12 +163,16 @@ void vu_unpack(int vu, const VuUnpack *u, const u32 *data) {
         unpack_fast(mem, qwords, addr, num, cl, wl, (int)vn, (int)vl, usn, (const u8 *)data);
         return;
     }
+    if (masked && u->mode == 0 && cl >= wl && vl != 3) {
+        unpack_masked(mem, qwords, addr, num, cl, wl, (int)vn, (int)vl, usn, (const u8 *)data, u);
+        return;
+    }
     u32 bitpos = 0, cycle = 0;
     u32 row[4];
     memcpy(row, u->row, 16);
 
     for (u32 n = 0; n < num;) {
-        u32 *dst = (u32 *)(mem + (addr % qwords) * 16);
+        u32 *dst = (u32 *)(mem + (addr & (qwords - 1)) * 16);
         int write_data = cl >= wl ? 1 : (cycle < cl);
         u32 val[4] = {0, 0, 0, 0};
         if (write_data) {

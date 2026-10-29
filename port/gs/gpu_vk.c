@@ -22,6 +22,7 @@
 #include "runtime.h"
 #include "gs.h"
 #include "gpu.h"
+#include "perf.h"
 
 int kernel_ntsc(void);
 #include "shaders.h"        /* generated from port/gs/shaders by configure.py */
@@ -338,8 +339,11 @@ static SDL_GPUGraphicsPipeline *pipe_for(const GpuDraw *d) {
     ci.depth_stencil_state.enable_depth_test = !(debug_flags & 1);
     ci.depth_stencil_state.compare_op = ops[d->ztst < 5 ? d->ztst : 0];
     ci.depth_stencil_state.enable_depth_write = zwrite;
+    u64 t = perf_now();
     SDL_GPUGraphicsPipeline *p = SDL_CreateGPUGraphicsPipeline(dev, &ci);
     if (!p) rt_fatal(NULL, "GPU pipeline: %s", SDL_GetError());
+    perf.pipes++;
+    perf.pipe_ns += perf_now() - t;
     if (npipes < (int)(sizeof pipes / sizeof *pipes)) pipes[npipes++] = (Pipe){key, p};
     return p;
 }

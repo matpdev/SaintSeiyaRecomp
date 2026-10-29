@@ -249,12 +249,14 @@ void vu_start(int id, int addr, u32 itop) {
                     if (by_pc[k] > 500) rt_log("vu", "interpreted from %03X: %u times", k * 8, by_pc[k]);
             }
         }
+        u64 ti = t ? perf_stamp() : 0;
         run(v);
+        if (ti) perf.vu_interp_ns += perf_since(ti);
     }
     if (id == 1 && (programs_run & 0xFFFFF) == 0)
         rt_log("vu", "VU1: %llu programs fully native, %llu (partly) interpreted, %llu pairs interpreted",
                (unsigned long long)native_runs, (unsigned long long)partial_runs, (unsigned long long)pairs_run);
-    u64 dt = t ? perf_now() - t : 0;
+    u64 dt = t ? perf_since(t) : 0;
     perf.vu_ns += dt;
     perf.gs_ns -= 0;   /* (XGKICK time, inside run(), is also in gs_ns) */
 }

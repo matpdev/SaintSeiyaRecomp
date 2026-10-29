@@ -36,7 +36,7 @@ static u32 render_frames;               /* pictures shown (GPU window), for the 
 /* --press 600:CROSS,700:START,800:DOWN:20: press a button at those times for 6 vertical blanks, or for
    the given number (tests) */
 typedef struct { int at, len; u16 btn; } Press;
-static Press presses[64];
+static Press presses[4096];
 static int npresses;
 
 static const struct { const char *name; u16 bit; } button_names[] = {
@@ -45,9 +45,9 @@ static const struct { const char *name; u16 bit; } button_names[] = {
     {"TRIANGLE", PAD_TRIANGLE}, {"CIRCLE", PAD_CIRCLE}, {"CROSS", PAD_CROSS}, {"SQUARE", PAD_SQUARE}};
 
 void display_set_presses(const char *spec) {
-    char buf[1024];
+    static char buf[1 << 16];
     snprintf(buf, sizeof buf, "%s", spec);
-    for (char *tok = strtok(buf, ","); tok && npresses < 64; tok = strtok(NULL, ",")) {
+    for (char *tok = strtok(buf, ","); tok && npresses < (int)(sizeof presses / sizeof *presses); tok = strtok(NULL, ",")) {
         char *colon = strchr(tok, ':');
         if (!colon) continue;
         *colon = 0;
