@@ -10,7 +10,8 @@
  * programs are also found in its executable and compiled ahead of time (vu_jit_ahead, at the end).
  *
  * A translated program returns 0 when it ends (E bit), or 1 when it jumps to a pair outside the
- * pairs it was translated with (an indirect jump): v->pc is where to go on.
+ * pairs it was translated with (an indirect jump): v->pc is where to go on; 2 when it can't start
+ * there (a Q or P result on its way: the interpreter goes on).
  *
  * SSTHEH_VUJIT=0 turns it off. The generated code needs the sources (port/gs, port/runtime),
  * found next to the executable (build/..).
@@ -33,7 +34,7 @@
 #include "perf.h"
 
 #define NPAIRS (0x4000 / 8)
-#define GEN_VERSION 4           /* of the C written: part of the keys */
+#define GEN_VERSION 11          /* of the C written: part of the keys */
 
 typedef int (*ProgFn)(Vu *v);
 
@@ -73,35 +74,65 @@ static int is_branch(u32 lo) { u32 op = lo >> 25; return op == 0x20 || op == 0x2
 static int is_jump(u32 lo) { u32 op = lo >> 25; return op == 0x24 || op == 0x25; }
 static u32 branch_target(u32 lo, u32 pair) { s32 imm11 = ((s32)(lo << 21)) >> 21; return (pair + 1 + imm11) % NPAIRS; }
 
-/* The pairs reachable from `entry` (in[]), how many. */
+/* Where the JR / JALR among the pairs in in[] can go, as far as the code says: the constants put
+ * in their registers by IADDIU from vi0 anywhere in in[] (how subroutines are called). Writes the
+ * targets in t[] (as flags), returns how many are not in in[] yet. */
+static u32 jump_targets(const u8 *code, const u8 *in, u8 *t) {
+    u32 regs = 0, added = 0;
+    for (u32 p = 0; p < NPAIRS; p++) {
+        if (!in[p]) continue;
+        u32 lo = rd_word(code, p, 0), hi = rd_word(code, p, 1);
+        if (!(hi >> 31) && is_jump(lo)) regs |= 1u << ((lo >> 11) & 15);
+    }
+    memset(t, 0, NPAIRS);
+    if (!regs) return 0;
+    for (u32 p = 0; p < NPAIRS; p++) {
+        if (!in[p]) continue;
+        u32 lo = rd_word(code, p, 0), hi = rd_word(code, p, 1);
+        if ((hi >> 31) || (lo >> 25) != 0x08 || ((lo >> 11) & 31) != 0 || !(regs >> ((lo >> 16) & 15) & 1)) continue;
+        u32 c = (((lo >> 10) & 0x7800) | (lo & 0x7FF)) % NPAIRS;
+        if (!t[c] && !in[c]) added++;
+        t[c] = 1;
+    }
+    return added;
+}
+
+/* The pairs reachable from `entry` (in[]), how many: following branches, and the jumps to
+ * constant addresses. */
 static u32 reach(const u8 *code, u32 entry, u8 *in) {
     static u32 work[NPAIRS * 4];
     static u8 last[NPAIRS];     /* executed, but nothing after it (the pair after an E bit) */
+    static u8 t[NPAIRS];
     u32 nw = 0, count = 0;
     memset(in, 0, NPAIRS);
     memset(last, 0, NPAIRS);
     work[nw++] = entry;
-    while (nw) {
-        u32 p = work[--nw] % NPAIRS;
-        if (in[p]) continue;
-        in[p] = 1;
-        count++;
-        if (last[p]) continue;
-        u32 lo = rd_word(code, p, 0), hi = rd_word(code, p, 1);
-        int ibit = hi >> 31;
-        u32 next = (p + 1) % NPAIRS;
-        if (hi & 0x40000000u) {                          /* E: the next pair, then the end */
-            if (!in[next]) { last[next] = 1; work[nw++] = next; }
-            continue;
+    for (;;) {
+        while (nw) {
+            u32 p = work[--nw] % NPAIRS;
+            if (in[p]) continue;
+            in[p] = 1;
+            count++;
+            if (last[p]) continue;
+            u32 lo = rd_word(code, p, 0), hi = rd_word(code, p, 1);
+            int ibit = hi >> 31;
+            u32 next = (p + 1) % NPAIRS;
+            if (hi & 0x40000000u) {                          /* E: the next pair, then the end */
+                if (!in[next]) { last[next] = 1; work[nw++] = next; }
+                continue;
+            }
+            if (!ibit && is_branch(lo)) {
+                work[nw++] = branch_target(lo, p);
+                if ((lo >> 25) == 0x21) work[nw++] = (p + 2) % NPAIRS;   /* BAL: where it returns */
+            } else if (!ibit && is_jump(lo) && (lo >> 25) == 0x25) {
+                work[nw++] = (p + 2) % NPAIRS;               /* JALR: where it returns */
+            }
+            work[nw++] = next;
+            if (nw > NPAIRS * 4 - 8) break;
         }
-        if (!ibit && is_branch(lo)) {
-            work[nw++] = branch_target(lo, p);
-            if ((lo >> 25) == 0x21) work[nw++] = (p + 2) % NPAIRS;   /* BAL: where it returns */
-        } else if (!ibit && is_jump(lo) && (lo >> 25) == 0x25) {
-            work[nw++] = (p + 2) % NPAIRS;               /* JALR: where it returns */
-        }
-        work[nw++] = next;
-        if (nw > NPAIRS * 4 - 8) break;
+        if (!jump_targets(code, in, t)) break;
+        for (u32 p = 0; p < NPAIRS && nw < NPAIRS * 4 - 8; p++)
+            if (t[p] && !in[p]) work[nw++] = p;
     }
     return count;
 }
@@ -229,8 +260,10 @@ static void gen_upper(Str *s, const Dec *d, int flags, int *has_out, char *out_d
     }
     case UK_FTOI: {
         static const char *const sc[4] = {"1.0f", "16.0f", "4096.0f", "32768.0f"};
-        put(s, "    { float t_[4]; s32 r_[4]; _mm_storeu_ps(t_, _mm_mul_ps(%s, _mm_set1_ps(%s)));\n"
-               "      for (int k = 0; k < 4; k++) r_[k] = fpu_cvtw(t_[k]); u = _mm_castsi128_ps(_mm_loadu_si128((const __m128i *)r_)); }\n",
+        /* as fpu_cvtw() on each lane: truncated, too big -> INT32_MAX, too small or NaN -> INT32_MIN */
+        put(s, "    { __m128 t_ = _mm_mul_ps(%s, _mm_set1_ps(%s));\n"
+               "      u = _mm_blendv_ps(_mm_castsi128_ps(_mm_cvttps_epi32(t_)), _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF)),\n"
+               "                        _mm_cmpge_ps(t_, _mm_set1_ps(2147483648.0f))); }\n",
             FR(d->fs, a), sc[d->sc]);
         break;
     }
@@ -239,9 +272,11 @@ static void gen_upper(Str *s, const Dec *d, int flags, int *has_out, char *out_d
         break;
     case UK_CLIP: {
         const char *fs = FR(d->fs, a), *ft = FR(d->ft, b);
-        put(s, "    { float a_[4], t_[4]; _mm_storeu_ps(a_, %s); _mm_storeu_ps(t_, %s); float lim = fabsf(t_[3]); u32 c_ = 0;\n"
-               "      if (a_[0] > lim) c_ |= 1; if (a_[0] < -lim) c_ |= 2; if (a_[1] > lim) c_ |= 4; if (a_[1] < -lim) c_ |= 8;\n"
-               "      if (a_[2] > lim) c_ |= 16; if (a_[2] < -lim) c_ |= 32; CLIPV = ((CLIPV << 6) | c_) & 0xFFFFFF; }\n", fs, ft);
+        /* x > |w|: bit 0, x < -|w|: bit 1, then y, z (movemask bits spread to every other bit) */
+        put(s, "    { static const u8 sp_[8] = {0, 1, 4, 5, 16, 17, 20, 21};\n"
+               "      __m128 a_ = %s, l_ = _mm_andnot_ps(_mm_set1_ps(-0.0f), BC(%s, 3));\n"
+               "      u32 c_ = sp_[_mm_movemask_ps(_mm_cmpgt_ps(a_, l_)) & 7] | sp_[_mm_movemask_ps(_mm_cmplt_ps(a_, _mm_xor_ps(l_, _mm_set1_ps(-0.0f)))) & 7] << 1;\n"
+               "      CLIPV = ((CLIPV << 6) | c_) & 0xFFFFFF; }\n", fs, ft);
         return;
     }
     default: return;
@@ -475,11 +510,14 @@ static const char *const LOCAL_STATE_MACROS =
     "#define SETQ(x, l) do { l_qn = clampf(x); l_qw = (l); } while (0)\n#define SETP(x, l) do { l_pn = (x); l_pw = (l); } while (0)\n"
     "#define WAITQ() do { if (l_qw) { l_q = l_qn; l_qw = 0; } } while (0)\n"
     "#define WAITP() do { if (l_pw) { l_p = l_pn; l_pw = 0; } } while (0)\n"
-    "#define TICK() do { if (l_qw && --l_qw == 0) l_q = l_qn; if (l_pw && --l_pw == 0) l_p = l_pn; } while (0)\n"
-    "#define FLAGS_ADVANCE() do { m3 = m2; m2 = m1; m1 = m0; m0 = l_mac; s3 = s2; s2 = s1; s1 = s0; s0 = l_st; "
-    "c3 = c2; c2 = c1; c1 = c0; c0 = l_clip; } while (0)\n\n";
+    "#define TICKQ() do { if (l_qw && --l_qw == 0) l_q = l_qn; } while (0)\n"
+    "#define TICKP() do { if (l_pw && --l_pw == 0) l_p = l_pn; } while (0)\n"
+    "#define FLAGS_ADVANCE_MS() do { m3 = m2; m2 = m1; m1 = m0; m0 = l_mac; s3 = s2; s2 = s1; s1 = s0; s0 = l_st; } while (0)\n"
+    "#define FLAGS_ADVANCE_C() do { c3 = c2; c2 = c1; c1 = c0; c0 = l_clip; } while (0)\n\n";
 
-typedef struct { int flag_reads, qp; } Needs;
+/* mac_reads: the program reads the MAC or status flags (otherwise they are not computed); clip_reads:
+ * the clip flags; qp: Q or P. */
+typedef struct { int mac_reads, clip_reads, qp; const u8 *mac_live, *tick; } Needs;
 
 /* One pair's work (no label, no flow). Returns the kind of its lower instruction: 0 plain,
  * 1 branch or jump written inline, 2 through vu_lower() (may branch). */
@@ -487,10 +525,11 @@ static int emit_body(Str *s, const u8 *code, u32 p, Needs n) {
     u32 lo = rd_word(code, p, 0), hi = rd_word(code, p, 1);
     Dec d;
     vu_decode(&d, lo, hi);
-    if (n.qp) put(s, "    TICK();\n");
+    if (n.qp && (n.tick[p] & 1)) put(s, "    TICKQ();\n");
+    if (n.qp && (n.tick[p] & 2)) put(s, "    TICKP();\n");
     int has_out = 0, out_dest = 0, kind = 0;
     char out_dst[8] = "";
-    gen_upper(s, &d, n.flag_reads, &has_out, out_dst, &out_dest);
+    gen_upper(s, &d, n.mac_reads && n.mac_live[p], &has_out, out_dst, &out_dest);
     if (d.ibit) put(s, "    { u32 x = 0x%08Xu; memcpy(&IVAL, &x, 4); }\n", lo);
     else if (!d.lnop) {
         kind = gen_lower(s, lo, p * 8);
@@ -501,7 +540,8 @@ static int emit_body(Str *s, const u8 *code, u32 p, Needs n) {
         }
     }
     if (has_out) put_masked(s, out_dst, "u", out_dest);
-    if (n.flag_reads) put(s, "    FLAGS_ADVANCE();\n");
+    if (n.mac_reads) put(s, "    FLAGS_ADVANCE_MS();\n");
+    if (n.clip_reads) put(s, "    FLAGS_ADVANCE_C();\n");
     return kind;
 }
 
@@ -519,6 +559,138 @@ static int pair_flags(const u8 *code, u32 p, int *branch, int *ebit) {
     return 0;
 }
 
+/* How the pairs in in[] follow each other (with branch delay pairs), for the analyses below. A pair
+ * with out set may be followed by code outside (another program, or vu_lower()). */
+enum { MAXS = 16 };
+typedef struct {
+    u32 succ[NPAIRS][MAXS];
+    u8 nsucc[NPAIRS], out[NPAIRS];
+    int open;                   /* a JR / JALR may go to more labels than recorded */
+} Flow;
+
+static void flow_build(const u8 *code, const u8 *in, Flow *f) {
+    u8 lab[NPAIRS];
+    memset(f->nsucc, 0, sizeof f->nsucc);
+    memset(f->out, 0, sizeof f->out);
+    f->open = 0;
+    jump_targets(code, in, lab);
+    Str scratch = {0};
+#define SUCC(p, q) do { u32 q_ = (q) % NPAIRS; if (!in[q_]) f->out[p] = 1; else if (f->nsucc[p] < MAXS) f->succ[p][f->nsucc[p]++] = q_; else { f->out[p] = 1; f->open = 1; } } while (0)
+    for (u32 p = 0; p < NPAIRS; p++) {
+        if (!in[p]) continue;
+        u32 lo = rd_word(code, p, 0), hi = rd_word(code, p, 1);
+        if (!(hi >> 31) && lo != 0x8000033Cu) {
+            scratch.len = 0;
+            if (gen_lower(&scratch, lo, p * 8) == 2) f->out[p] = 1;   /* through vu_lower() */
+        }
+        SUCC(p, p + 1);                                    /* after an E pair: its delay pair, then the end */
+        if ((hi >> 30) & 1 || (hi >> 31) || !(is_branch(lo) || is_jump(lo))) continue;
+        u32 dly = (p + 1) % NPAIRS;                        /* the delay pair goes on at the target(s) */
+        if (is_jump(lo)) {
+            f->out[dly] = 1;
+            for (u32 t = 0; t < NPAIRS; t++) if (lab[t] && in[t]) SUCC(dly, t);
+        } else SUCC(dly, branch_target(lo, p));
+    }
+#undef SUCC
+    free(scratch.buf);
+}
+
+/* Which pairs must compute the MAC and status flags (live[]): those whose flags can be seen. A
+ * flag read sees the flags of 4 pairs before it; a program that goes on in another one (leaving
+ * through `out` other than at its end, or through vu_lower()) hands over the flags of its last 4
+ * pairs. Flags that only reach the end of the program are not kept, as when the program reads no
+ * flags at all. FCSET and FSSET put the pair's flags in all 4 places. The sticky status bits need
+ * every result: a program reading them computes them everywhere. */
+static void mac_liveness(const u8 *code, const u8 *in, const Flow *f, u8 *live) {
+    u8 sets[NPAIRS], obs[NPAIRS], fill[NPAIRS];
+    memset(sets, 0, sizeof sets);
+    memset(obs, 0, sizeof obs);
+    memset(fill, 0, sizeof fill);
+    memset(live, 0, NPAIRS);
+    Str scratch = {0};
+    for (u32 p = 0; p < NPAIRS; p++) {
+        if (!in[p]) continue;
+        u32 lo = rd_word(code, p, 0), hi = rd_word(code, p, 1), op = lo >> 25;
+        Dec d;
+        vu_decode(&d, lo, hi);
+        int has_out = 0, out_dest = 0;
+        char out_dst[8];
+        scratch.len = 0;
+        gen_upper(&scratch, &d, 1, &has_out, out_dst, &out_dest);
+        sets[p] = scratch.len && strstr(scratch.buf, "SETFLAGS") != NULL;
+        if ((hi >> 31) || lo == 0x8000033Cu) continue;
+        u32 imm12 = ((lo >> 10) & 0x800) | (lo & 0x7FF);
+        if (op == 0x14 || ((op == 0x16 || op == 0x17) && (imm12 & 0xFC0))) {   /* sticky bits */
+            memset(live, 1, NPAIRS);
+            free(scratch.buf);
+            return;
+        }
+        if (op >= 0x16 && op <= 0x1B) obs[p] = 1;          /* reads them 4 pairs later */
+        if (op == 0x11 || op == 0x15) fill[p] = 1;         /* FCSET, FSSET: this pair's flags in all 4 */
+        if (f->out[p]) obs[p] = 1;                         /* vu_lower() reads them too */
+    }
+    free(scratch.buf);
+    /* seen[p]: the flags after p can be seen: a read 1 to 4 pairs on, or a way out 0 to 3 pairs on */
+    u8 seen[NPAIRS], rd[NPAIRS], ex[NPAIRS], nrd[NPAIRS], nex[NPAIRS];
+    memcpy(seen, fill, sizeof seen);
+    memcpy(rd, obs, sizeof rd);
+    memcpy(ex, f->out, sizeof ex);
+    for (int k = 0; k <= 4; k++) {                          /* rd: a read k pairs on; ex: a way out */
+        for (u32 p = 0; p < NPAIRS; p++) if (in[p] && ((k >= 1 && rd[p]) || (k <= 3 && ex[p]))) seen[p] = 1;
+        for (u32 p = 0; p < NPAIRS; p++) {
+            nrd[p] = nex[p] = 0;
+            for (u32 j = 0; j < f->nsucc[p]; j++) { nrd[p] |= rd[f->succ[p][j]]; nex[p] |= ex[f->succ[p][j]]; }
+        }
+        memcpy(rd, nrd, sizeof rd);
+        memcpy(ex, nex, sizeof ex);
+    }
+    /* live[p]: the flags after p are seen, here or after pairs that don't set them */
+    memcpy(live, seen, NPAIRS);
+    for (int changed = 1; changed;) {
+        changed = 0;
+        for (u32 p = 0; p < NPAIRS; p++) {
+            if (!in[p] || live[p]) continue;
+            for (u32 k = 0; k < f->nsucc[p]; k++) {
+                u32 q = f->succ[p][k];
+                if (live[q] && !sets[q]) { live[p] = 1; changed = 1; break; }
+            }
+        }
+    }
+}
+
+/* Where a Q or P result can still be on its way when the pair starts (tick[p]: bit 0 Q, bit 1 P),
+ * so that the pair has to count it down. A program starts with none on the way (it checks). */
+static void qp_pending(const u8 *code, const u8 *in, const Flow *f, u8 *tick) {
+    u8 qin[NPAIRS], pin[NPAIRS];                           /* the most pairs left on entry */
+    memset(qin, 0, sizeof qin);
+    memset(pin, 0, sizeof pin);
+    memset(tick, 0, NPAIRS);
+    if (f->open) { memset(tick, 3, NPAIRS); return; }
+    for (int changed = 1; changed;) {
+        changed = 0;
+        for (u32 p = 0; p < NPAIRS; p++) {
+            if (!in[p]) continue;
+            u32 lo = rd_word(code, p, 0), hi = rd_word(code, p, 1);
+            int q = qin[p] ? qin[p] - 1 : 0, pp = pin[p] ? pin[p] - 1 : 0;
+            if (!(hi >> 31) && (lo >> 25) == 0x40 && (lo & 0x3F) >= 0x3C) {
+                u32 s2 = ((lo >> 6) & 0x1F) << 2 | (lo & 3);
+                /* the latencies gen_lower() gives them; 64 for those left to vu_lower() */
+                static const u8 lat[0x10] = {11, 18, 18, 24, 64, 64, 12, 64, 12, 18, 12, 0, 64, 64, 64, 64};
+                if (s2 == 0x38 || s2 == 0x39) q = 7;           /* DIV, SQRT */
+                else if (s2 == 0x3A) q = 13;                   /* RSQRT */
+                else if (s2 == 0x3B) q = 0;                    /* WAITQ */
+                else if (s2 >= 0x70 && s2 <= 0x7F) pp = lat[s2 - 0x70];   /* EFU, WAITP */
+            }
+            for (u32 k = 0; k < f->nsucc[p]; k++) {
+                u32 t = f->succ[p][k];
+                if (q > qin[t]) { qin[t] = (u8)q; changed = 1; }
+                if (pp > pin[t]) { pin[t] = (u8)pp; changed = 1; }
+            }
+        }
+    }
+    for (u32 p = 0; p < NPAIRS; p++) tick[p] = (qin[p] ? 1 : 0) | (pin[p] ? 2 : 0);
+}
+
 static char *generate(const u8 *code, u32 entry, const u8 *in) {
     /* fall back on the general writer for the unusual shapes */
     for (u32 p = 0; p < NPAIRS; p++) {
@@ -530,7 +702,7 @@ static char *generate(const u8 *code, u32 entry, const u8 *in) {
         if (br1 || e1) return generate_v2(code, entry, in);
     }
     Str s = {0};
-    Needs n = {0, 0};
+    Needs n = {0, 0, 0, NULL, NULL};
     int uses_f[32] = {0}, uses_i[16] = {0}, uses_acc = 0;
     for (u32 p = 0; p < NPAIRS; p++) {
         if (!in[p]) continue;
@@ -545,12 +717,21 @@ static char *generate(const u8 *code, u32 entry, const u8 *in) {
         uses_f[it] = uses_f[is] = 1;
         uses_i[it & 15] = uses_i[is & 15] = uses_i[id & 15] = 1;
         uses_i[1] = 1;
-        if (op >= 0x10 && op <= 0x1C) n.flag_reads = 1;
+        if (op >= 0x14 && op <= 0x1B) n.mac_reads = 1;
+        if ((op >= 0x10 && op <= 0x13) || op == 0x1C) n.clip_reads = 1;
         if (op == 0x40 && (lo & 0x3F) >= 0x3C) {
             u32 s2 = ((lo >> 6) & 0x1F) << 2 | (lo & 3);
             if ((s2 >= 0x38 && s2 <= 0x3B) || (s2 >= 0x70 && s2 <= 0x7E)) n.qp = 1;
         }
     }
+    Flow *flow = malloc(sizeof *flow);
+    u8 *mac_live = malloc(NPAIRS), *tick = malloc(NPAIRS);
+    flow_build(code, in, flow);
+    if (n.mac_reads) mac_liveness(code, in, flow, mac_live);
+    if (n.qp) qp_pending(code, in, flow, tick);
+    free(flow);
+    n.mac_live = mac_live;
+    n.tick = tick;
     uses_f[0] = 0;
     uses_i[0] = 0;
     put(&s, "/* VU1 program from %03X (v3) */\n#include \"vu_internal.h\"\n\n", entry);
@@ -562,16 +743,21 @@ static char *generate(const u8 *code, u32 entry, const u8 *in) {
     put(&s, "%s", LOCAL_STATE_MACROS);
     put(&s, "int vu_prog(Vu *v) {\n    static void *L2[%d];\n    static int init;\n    if (!init) {\n", NPAIRS);
     put(&s, "        for (int k = 0; k < %d; k++) L2[k] = &&out;\n", NPAIRS);
-    /* Only the pairs entered through L2 have their address taken: the entry and where BAL / JALR
-     * return (JR's usual targets). Any other JR target leaves through `out` and the caller goes
-     * on from v->pc. With fewer ways in, gcc keeps values in registers across pairs and drops
-     * flags and Q/P updates nobody reads. */
-    put(&s, "        L2[%u] = &&p%u;\n", entry, entry);
+    /* Only the pairs entered through L2 have their address taken: the entry, where BAL / JALR
+     * return and the constant JR / JALR targets. Any other JR target leaves through `out` and the
+     * caller goes on from v->pc. With fewer ways in, gcc keeps values in registers across pairs
+     * and drops flags and Q/P updates nobody reads. */
+    u8 *lab = calloc(NPAIRS, 1);
+    jump_targets(code, in, lab);
+    lab[entry] = 1;
     for (u32 p = 0; p < NPAIRS; p++) {
         if (!in[p]) continue;
-        u32 lo = rd_word(code, p, 0), hi = rd_word(code, p, 1), op = lo >> 25, r = (p + 2) % NPAIRS;
-        if (!(hi >> 31) && (op == 0x21 || op == 0x25) && in[r] && r != entry) put(&s, "        L2[%u] = &&p%u;\n", r, r);
+        u32 lo = rd_word(code, p, 0), hi = rd_word(code, p, 1), op = lo >> 25;
+        if (!(hi >> 31) && (op == 0x21 || op == 0x25)) lab[(p + 2) % NPAIRS] = 1;
     }
+    for (u32 p = 0; p < NPAIRS; p++)
+        if (lab[p] && in[p]) put(&s, "        L2[%u] = &&p%u;\n", p, p);
+    free(lab);
     put(&s, "        init = 1;\n    }\n");
     put(&s, "    int taken = 0, ret = 1;\n    u32 target = 0;\n    long guard = 0;\n    __m128 u = _mm_setzero_ps();\n");
     put(&s, "    (void)taken; (void)target; (void)guard; (void)u;\n");
@@ -603,6 +789,7 @@ static char *generate(const u8 *code, u32 entry, const u8 *in) {
     put(&s, "#define SYNC_OUT() do { %s} while (0)\n#define SYNC_IN() do { %s} while (0)\n", so.buf, si.buf);
     free(so.buf);
     free(si.buf);
+    if (n.qp) put(&s, "    if (l_qw | l_pw) return 2;   /* Q / P on the way: counted only where the program can have them */\n");
     put(&s, "    goto *L2[(v->pc & 0x3FFF) >> 3];\nout:\n    SYNC_OUT();\n    return ret;\n");
     for (u32 p = 0; p < NPAIRS; p++) {
         if (!in[p]) continue;
@@ -639,6 +826,8 @@ static char *generate(const u8 *code, u32 entry, const u8 *in) {
         put(&s, "}\n");
     }
     put(&s, "}\n");
+    free(mac_live);
+    free(tick);
     return s.buf;
 }
 
@@ -801,7 +990,9 @@ int vu_jit_run(Vu *v) {
             }
             return 0;
         }
-        if (fn(v) == 0) return 1;
+        int r = fn(v);
+        if (r == 0) return 1;
+        if (r == 2) return 0;
         perf.jit_hops++;
         if (dbg) {
             static u32 told2[0x800];

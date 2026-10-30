@@ -208,6 +208,36 @@ static void run(Vu *v) {
     _mm_setcsr(csr);
 }
 
+/* SSTHEH_VUREC=file (SSTHEH_VUREC_FROM=vertical blank, 8000 if not given): for 20 vertical blanks,
+ * each VU1 program run as it starts (Vu, data and code memories, TOP, ITOP) and as it ends (Vu,
+ * data memory), for tools/vubench.c. */
+static FILE *rec;
+
+static int record_before(const Vu *v) {
+    static int state = -1;
+    static u32 from;
+    if (state < 0) {
+        const char *e = getenv("SSTHEH_VUREC");
+        state = e && (rec = fopen(e, "wb")) != NULL;
+        from = getenv("SSTHEH_VUREC_FROM") ? (u32)atoi(getenv("SSTHEH_VUREC_FROM")) : 8000;
+    }
+    if (!rec) return 0;
+    u32 vb = kernel_vblank_count();
+    if (vb >= from + 20) { fclose(rec); rec = NULL; return 0; }
+    if (vb < from) return 0;
+    fwrite(v, sizeof *v, 1, rec);
+    fwrite(vu1_mem, 1, sizeof vu1_mem, rec);
+    fwrite(vu1_code, 1, sizeof vu1_code, rec);
+    fwrite(&vu1_top, 4, 1, rec);
+    fwrite(&vu1_itop, 4, 1, rec);
+    return 1;
+}
+
+static void record_after(const Vu *v) {
+    fwrite(v, sizeof *v, 1, rec);
+    fwrite(vu1_mem, 1, sizeof vu1_mem, rec);
+}
+
 void vu_start(int id, int addr, u32 itop) {
     Vu *v = &vus[id & 1];
     static int dumped;
@@ -227,6 +257,7 @@ void vu_start(int id, int addr, u32 itop) {
     u64 t = perf_stamp();
     v->vf[0].f[0] = v->vf[0].f[1] = v->vf[0].f[2] = 0.0f;
     v->vf[0].f[3] = 1.0f;
+    int recording = id == 1 && record_before(v);
     u32 csr = _mm_getcsr();
     _mm_setcsr(csr | 0x8040);                        /* FTZ | DAZ, as in run() */
     int done = vu_jit_run(v);
@@ -253,6 +284,7 @@ void vu_start(int id, int addr, u32 itop) {
         run(v);
         if (ti) perf.vu_interp_ns += perf_since(ti);
     }
+    if (recording) record_after(v);
     if (id == 1 && (programs_run & 0xFFFFF) == 0)
         rt_log("vu", "VU1: %llu programs fully native, %llu (partly) interpreted, %llu pairs interpreted",
                (unsigned long long)native_runs, (unsigned long long)partial_runs, (unsigned long long)pairs_run);

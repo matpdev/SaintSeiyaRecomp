@@ -41,7 +41,7 @@ does not work.
   - Arch: `sudo pacman -S gcc python shaderc sdl3 vulkan-icd-loader` (plus your GPU's driver)
   - Debian/Ubuntu: `sudo apt install gcc python3-venv glslc libsdl3-dev libvulkan1`
 - GCC is also used for the game's VU1 programs: they are compiled to native code from the executable,
-  ahead of time (`build/sstheh --compile-vu`, which `compilar.sh` runs, about 40 s), and kept in
+  ahead of time (`build/sstheh --compile-vu`, which `compilar.sh` runs, about 20 s), and kept in
   `~/.cache/sstheh/vu`; any missing ones are compiled in the background when the game starts
 
 ### 2. Build and play
@@ -120,11 +120,11 @@ vertical blanks, no window). Environment variables:
 | `SSTHEH_GS=sw` | software GS instead of Vulkan (slow) |
 | `SSTHEH_VUJIT=0`, `SSTHEH_GSTHREAD=0`, `SSTHEH_UPLOAD_DEDUP=0` | turn optimizations off (to compare when something looks wrong) |
 | `SSTHEH_PERF_LOG=1` | print what the F3 panel shows to the terminal |
+| `SSTHEH_VUREC=file` | record 20 vertical blanks of VU1 programs (from `SSTHEH_VUREC_FROM`, default 8000) for `tools/vubench.c`, which checks and times their translation |
 
 ### Known issues
 
 - videos don't play
-- the first use of each visual effect may stutter while its VU1 code compiles
 - if something breaks, run with `-v` and attach the log to the report, with what you were doing at the time
 
 ## Decompilation (matching build)

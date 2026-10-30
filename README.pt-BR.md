@@ -40,7 +40,7 @@ jogo está neste repositório. A tradução brasileira de fãs é outro build (c
   - Arch: `sudo pacman -S gcc python ninja shaderc sdl3 vulkan-icd-loader` (mais o driver da sua placa)
   - Debian/Ubuntu: `sudo apt install gcc python3-venv ninja-build glslc libsdl3-dev libvulkan1`
 - o GCC também é usado para os programas de VU1 do jogo: eles são compilados para código nativo a partir do
-  executável, antes de jogar (`build/sstheh --compile-vu`, que o `compilar.sh` roda, uns 40 s), e guardados em
+  executável, antes de jogar (`build/sstheh --compile-vu`, que o `compilar.sh` roda, uns 20 s), e guardados em
   `~/.cache/sstheh/vu`; os que faltarem são compilados em segundo plano quando o jogo abre
 
 ### 2. Compilar e jogar
@@ -118,11 +118,11 @@ indicados, sem janela). Variáveis de ambiente:
 | `SSTHEH_GS=sw` | GS em software em vez de Vulkan (lento) |
 | `SSTHEH_VUJIT=0`, `SSTHEH_GSTHREAD=0`, `SSTHEH_UPLOAD_DEDUP=0` | desligam otimizações (para comparar se algo sair errado) |
 | `SSTHEH_PERF_LOG=1` | escreve no terminal o que o painel F3 mostra |
+| `SSTHEH_VUREC=arquivo` | grava 20 vblanks de programas de VU1 (a partir de `SSTHEH_VUREC_FROM`, padrão 8000) para o `tools/vubench.c`, que confere e cronometra a tradução deles |
 
 ### Problemas conhecidos
 
 - vídeos não tocam
-- o primeiro uso de cada efeito visual pode engasgar enquanto o código do VU1 compila
 - se algo quebrar, rode com `-v` e anexe o log ao relato, junto com o que estava fazendo na hora
 
 ## Decompilação (build matching)

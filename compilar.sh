@@ -81,6 +81,6 @@ ok "ambiente Python"
 info "compilando (a primeira vez leva alguns minutos)"
 .venv/bin/python configure.py >/dev/null
 PATH="$PWD/.venv/bin:$PATH" ninja -j"$(nproc)" port
-info "compilando os programas de VU1 do jogo (uns 40 segundos na primeira vez)"
+info "compilando os programas de VU1 do jogo (uns 20 segundos na primeira vez)"
 ./build/sstheh -q --compile-vu || info "programas de VU1 não compilados agora: o jogo compila enquanto roda"
 ok "pronto: build/sstheh. Para jogar: ./jogar.sh"
