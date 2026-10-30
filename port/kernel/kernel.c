@@ -106,6 +106,20 @@ _Noreturn void rt_fatal(Ctx *c, const char *fmt, ...) {
         for (int i = 0; i < 32; i++)
             fprintf(stderr, "%4s=%016llX%s", names[i], (unsigned long long)c->r[i].d[0], i % 4 == 3 ? "\n" : " ");
         fprintf(stderr, "ra is in %s\n", rt_name_of(RW(31)));
+        for (int i = 1; i < 32; i++) heap_explain(names[i], RW(i));
+        /* the calls under way, as far as the stack shows them: words that are a return address
+         * (right after a JAL or JALR in the code) */
+        fprintf(stderr, "stack (return addresses from sp up):\n");
+        u32 sp = RW(29) & 0x01FFFFFC;
+        for (u32 a = sp, shown = 0; a < sp + 0x2000 && a + 4 <= 0x02000000 && shown < 24; a += 4) {
+            u32 w, call;
+            memcpy(&w, rt_ram + a, 4);
+            if (w < 0x00100008 || w >= 0x02000000 || (w & 3)) continue;
+            memcpy(&call, rt_ram + w - 8, 4);
+            if ((call >> 26) != 3 && (call & 0xFC00003F) != 9) continue;   /* JAL, JALR */
+            fprintf(stderr, "  sp+%04X: %08X in %s\n", a - sp, w, rt_name_of(w));
+            shown++;
+        }
     }
     fflush(stderr);
     _exit(1);

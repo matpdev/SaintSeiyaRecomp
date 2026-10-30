@@ -9,6 +9,9 @@ extern int rt_verbose;
 const FuncEntry *rt_find(u32 addr);
 const char *rt_name_of(u32 addr);
 
+/* hle/heap.c: what a crash report says about an address in a freed block (SSTHEH_POISON_FREE) */
+void heap_explain(const char *what, u32 addr);
+
 /* kernel.c */
 void kernel_init(void);
 void kernel_run(u32 entry);

@@ -34,3 +34,4 @@
 0x001374F0 hle_mc2_request
 # Functions that run a native function on entry and then their own code: address native_function before
 0x002A0E50 hle_widescreen_view before   # camera set_view_screen: ax * 3/4 for 16:9, see port/hle/widescreen.c
+0x00100A20 hle_heap_free before         # allocator free (allocator, p): SSTHEH_POISON_FREE=1 fills the block, see port/hle/heap.c
