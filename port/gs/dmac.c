@@ -17,6 +17,7 @@
  * then clears STR, sets D_STAT and raises the interrupt. While any is pending, VIF1_STAT, GIF_STAT
  * and VPU-STAT read busy (dmac_gs_busy). SSTHEH_GSTHREAD=0: everything at once on the EE's thread.
  */
+#define _GNU_SOURCE   /* pthread_setname_np */
 #include <pthread.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -221,6 +222,7 @@ static void gs_thread_start(void) {
     if (async) {
         pthread_t t;
         pthread_create(&t, NULL, gs_thread, NULL);
+        pthread_setname_np(t, "gs");
         pthread_detach(t);
     }
 }

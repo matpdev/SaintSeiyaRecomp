@@ -118,6 +118,11 @@ static void feed(Vif *v, const u32 *w, u32 n) {
             rt_log("vif", "VIF%d: command %08X wants %u words, dropped", v->id, code, need);
             return;
         }
+        if (i <= n && n - i >= need) {             /* all here: run it from the packet, no copy */
+            run(v, code, w + i);
+            i += need;
+            continue;
+        }
         v->cmd = code;
         v->need = need;
         v->got = 0;

@@ -116,7 +116,7 @@ static void tables_init(void) {
 }
 
 /* Reads (write = 0) or writes the pixel (x, y) of a buffer at bp (blocks), width bw (64 pixels), format psm. */
-static inline u32 vram_rw(u32 bp, u32 bw, u32 psm, u32 x, u32 y, int write, u32 v) {
+static inline __attribute__((always_inline)) u32 vram_rw(u32 bp, u32 bw, u32 psm, u32 x, u32 y, int write, u32 v) {
     u32 a, *w, z = 0;
     if (bw == 0) bw = 1;
     if ((psm & 0x30) == 0x30) { z = 1; psm &= 0x0F; }
@@ -539,7 +539,10 @@ static int nsealed, nfree;
 static u32 rec_frame = 1;                  /* frames sealed */
 static u32 last_seal_vb;
 
+static u32 vram_writes;                     /* bumped with any page_gen */
+
 static void pages_written(u32 bp_blocks, u32 blocks) {
+    vram_writes++;
     for (u32 pg = bp_blocks / 32; pg <= (bp_blocks + blocks) / 32 && pg < bp_blocks / 32 + 512; pg++) page_gen[pg & 511]++;
 }
 
@@ -674,10 +677,19 @@ static u64 hash_lanes(const u8 *p, u32 n, u64 seed) {
     return h ^ h >> 29;
 }
 
+/* Of the pages' contents; each page's hash is kept until something writes into it (page_gen). */
 static u64 pages_hash(u32 first, u32 n) {
+    static struct { u32 gen, valid; u64 h; } seen[512];
     u64 h = 0x9E3779B97F4A7C15ull ^ n;
-    for (u32 pg = first; pg < first + n; pg++)
-        h = (h ^ hash_lanes((const u8 *)&vram[(pg & 511) * 2048], 8192, h)) * 0x9E3779B97F4A7C15ull ^ pg;
+    for (u32 pg = first; pg < first + n; pg++) {
+        u32 i = pg & 511;
+        if (!seen[i].valid || seen[i].gen != page_gen[i]) {
+            seen[i].h = hash_lanes((const u8 *)&vram[i * 2048], 8192, 0x9E3779B97F4A7C15ull);
+            seen[i].gen = page_gen[i];
+            seen[i].valid = 1;
+        }
+        h = (h ^ seen[i].h) * 0x9E3779B97F4A7C15ull ^ pg;
+    }
     return h;
 }
 
@@ -730,6 +742,73 @@ u64 texpack_name(const u32 *px, u32 w, u32 h);                 /* texpack.c */
 void texpack_dump(u64 name, const u32 *px, u32 w, u32 h);
 u32 *texpack_find(u64 name, u32 *w, u32 *h);
 
+/* The texture at tbp as RGBA (tw x th), as texel() reads it: the palette expanded once, the
+ * buffer's row worked out once per line. */
+static void tex_decode(u32 *px, u32 tbp, u32 tbw, u32 psm, u32 tw, u32 th, u32 cbp, u32 cpsm, u32 csa) {
+    u32 bits = psm_bits(psm), pal[256];
+    if (bits == 8)
+        for (u32 i = 0; i < 256; i++) {
+            u32 c = (i & 0xE7) | ((i & 8) << 1) | ((i & 0x10) >> 1);
+            pal[i] = expand(vram_rw(cbp, 1, cpsm, c & 15, c >> 4, 0, 0), cpsm);
+        }
+    else if (bits == 4)
+        for (u32 i = 0; i < 16; i++) {
+            u32 c = i + (csa & 15) * 16;
+            pal[i] = expand(vram_rw(cbp, 1, cpsm, c & 7, (c >> 3) & 31, 0, 0), cpsm);
+        }
+    u32 bw = tbw ? tbw : 1;
+    for (u32 y = 0; y < th; y++) {
+        u32 *out = px + y * tw;
+        switch (psm) {
+        case 0x14: {
+            u32 row = tbp + (y >> 7) * 32 * (bw >> 1);
+            const u16 *in = in4[y & 127];
+            for (u32 x = 0; x < tw; x++) {
+                u32 a = ((row + (x >> 7) * 32) << 9) + in[x & 127];
+                out[x] = pal[(vram[(a >> 3) & 0xFFFFF] >> ((a & 7) * 4)) & 15];
+            }
+            break;
+        }
+        case 0x13: {
+            u32 row = tbp + (y >> 6) * 32 * (bw >> 1);
+            const u16 *in = in8[y & 63];
+            for (u32 x = 0; x < tw; x++) {
+                u32 a = ((row + (x >> 7) * 32) << 8) + in[x & 127];
+                out[x] = pal[(vram[(a >> 2) & 0xFFFFF] >> ((a & 3) * 8)) & 0xFF];
+            }
+            break;
+        }
+        case 0x00: case 0x01: case 0x1B: case 0x24: case 0x2C: {   /* inside 32-bit pixels */
+            u32 row = tbp + (y >> 5) * 32 * bw;
+            const u16 *in = in32[0][y & 31];
+            for (u32 x = 0; x < tw; x++) {
+                u32 w = vram[(((row + (x >> 6) * 32) << 6) + in[x & 63]) & 0xFFFFF];
+                out[x] = psm == 0x1B ? pal[w >> 24] : psm == 0x24 ? pal[(w >> 24) & 15] : psm == 0x2C ? pal[w >> 28]
+                                                                                       : expand(w, psm);
+            }
+            break;
+        }
+        case 0x02: case 0x0A: {
+            u32 row = tbp + (y >> 6) * 32 * bw;
+            const u16 *in = in16[(psm == 0x0A) * 2][y & 63];
+            for (u32 x = 0; x < tw; x++) {
+                u32 a = ((row + (x >> 6) * 32) << 7) + in[x & 63];
+                out[x] = expand((vram[(a >> 1) & 0xFFFFF] >> ((a & 1) * 16)) & 0xFFFF, psm);
+            }
+            break;
+        }
+        default:                                    /* depth formats read as textures: rare */
+            for (u32 x = 0; x < tw; x++) {
+                u32 c = vram_rw(tbp, tbw, psm, x, y, 0, 0);
+                if (bits > 8) c = expand(c, psm);
+                else if (bits == 8) c = pal[c & 0xFF];
+                else c = pal[c & 15];
+                out[x] = c;
+            }
+        }
+    }
+}
+
 static s32 texture_for(int ctx, u32 *w_out, u32 *h_out) {
     transfer_flush();
     u64 t0 = gs.tex0[ctx];
@@ -742,15 +821,25 @@ static s32 texture_for(int ctx, u32 *w_out, u32 *h_out) {
     *h_out = th;
     /* a frame buffer the game drew into, read as a 32/24-bit texture: the render target itself */
     if ((tbp & 31) == 0 && rt_fbp[(tbp >> 5) & 511] && psm_bits(psm) >= 24) return -2 - (s32)(tbp >> 5);
+    u64 base = t0 & 0x1FFFFFFFFFFFFFFFull;
+    /* nothing written into the GS memory since this TEX0 / TEXA last found its entry: the same one
+       (the page versions below walk every page the texture may cover, often hundreds) */
+    static struct { u64 t0, texa, ckey[3]; u32 writes, idx; } memo[1024];
+    u32 mi = (u32)(((base ^ gs.texa * 7) * 0x9E3779B97F4A7C15ull) >> 54);
+    if (memo[mi].idx && memo[mi].writes == vram_writes && memo[mi].t0 == base && memo[mi].texa == gs.texa) {
+        TexEnt *e = &tex_ents[memo[mi].idx];
+        if (e->used && !memcmp(e->ckey, memo[mi].ckey, sizeof e->ckey)) { e->last = rec_frame; return (s32)memo[mi].idx; }
+    }
+#define MEMO(i) (memo[mi].t0 = base, memo[mi].texa = gs.texa, memo[mi].writes = vram_writes, memo[mi].idx = (i), \
+                 memcpy(memo[mi].ckey, tex_ents[i].ckey, sizeof memo[mi].ckey))
     u32 bits = psm_bits(psm), pfirst, pn;
     footprint(tbp, tbw, psm, tw, th, &pfirst, &pn);
     u32 cfirst = cbp / 32, cn = bits <= 8 ? 1 + ((cbp & 31) != 0) : 0;
-    u64 base = t0 & 0x1FFFFFFFFFFFFFFFull;
     u64 key[3] = {base, gs.texa, pages_version(pfirst, pn) * 31 + (cn ? pages_version(cfirst, cn) : 0)};
     TexFast *f = &tex_fast[(key[0] ^ key[1] * 7 ^ key[2] * 13) % 8192];
     if (f->idx && !memcmp(f->key, key, sizeof key)) {
         TexEnt *e = &tex_ents[f->idx];
-        if (e->used && !memcmp(e->ckey, f->ckey, sizeof f->ckey)) { e->last = rec_frame; return (s32)f->idx; }
+        if (e->used && !memcmp(e->ckey, f->ckey, sizeof f->ckey)) { e->last = rec_frame; MEMO(f->idx); return (s32)f->idx; }
     }
     /* the pages changed (or never seen): same content as a texture we have? */
     u64 ckey[3] = {base, gs.texa, pages_hash(pfirst, pn) * 31 + (cn ? pages_hash(cfirst, cn) : 0)};
@@ -761,19 +850,7 @@ static s32 texture_for(int ctx, u32 *w_out, u32 *h_out) {
         idx = tex_alloc(tw, th);
         if (!idx) return -1;
         u32 *px = malloc((size_t)tw * th * 4);
-        for (u32 y = 0; y < th; y++)
-            for (u32 x = 0; x < tw; x++) {
-                u32 c = vram_rw(tbp, tbw, psm, x, y, 0, 0);
-                if (bits > 8) c = expand(c, psm);
-                else if (bits == 8) {
-                    c = (c & 0xE7) | ((c & 8) << 1) | ((c & 0x10) >> 1);
-                    c = expand(vram_rw(cbp, 1, cpsm, c & 15, c >> 4, 0, 0), cpsm);
-                } else {
-                    c += (csa & 15) * 16;
-                    c = expand(vram_rw(cbp, 1, cpsm, c & 7, (c >> 3) & 31, 0, 0), cpsm);
-                }
-                px[y * tw + x] = c;
-            }
+        tex_decode(px, tbp, tbw, psm, tw, th, cbp, cpsm, csa);
         /* texture packs (texpack.c): saved, or replaced by a PNG of any size (draws keep using
            the original's size in texels) */
         u64 name = texpack_name(px, tw, th);
@@ -795,6 +872,8 @@ static s32 texture_for(int ctx, u32 *w_out, u32 *h_out) {
     memcpy(f->key, key, sizeof key);
     memcpy(f->ckey, ckey, sizeof ckey);
     f->idx = idx;
+    MEMO(idx);
+#undef MEMO
     return (s32)idx;
 }
 
@@ -917,10 +996,22 @@ static void local_to_local(void) {
     u32 w = gs.trxreg & 0xFFF, h = (gs.trxreg >> 32) & 0xFFF;
     static u32 tmp[2048 * 2048 / 4];
     if ((u64)w * h > sizeof tmp / 4) return;
-    for (u32 y = 0; y < h; y++)
-        for (u32 x = 0; x < w; x++) tmp[y * w + x] = vram_rw(sbp, sbw, spsm, sx + x, sy + y, 0, 0);
-    for (u32 y = 0; y < h; y++)
-        for (u32 x = 0; x < w; x++) vram_rw(dbp, dbw, dpsm, dx + x, dy + y, 1, tmp[y * w + x]);
+    /* each loop with the format as a constant, so vram_rw's switch goes away */
+#define EACH_PSM(psm, LOOP) do { switch (psm) { \
+    case 0x00: LOOP(0x00); break; case 0x01: LOOP(0x01); break; case 0x02: LOOP(0x02); break; \
+    case 0x0A: LOOP(0x0A); break; case 0x13: LOOP(0x13); break; case 0x14: LOOP(0x14); break; \
+    case 0x1B: LOOP(0x1B); break; case 0x24: LOOP(0x24); break; case 0x2C: LOOP(0x2C); break; \
+    case 0x30: LOOP(0x30); break; case 0x31: LOOP(0x31); break; case 0x32: LOOP(0x32); break; \
+    case 0x3A: LOOP(0x3A); break; default: LOOP(psm); } } while (0)
+#define READ(P) for (u32 y = 0; y < h; y++) \
+        for (u32 x = 0; x < w; x++) tmp[y * w + x] = vram_rw(sbp, sbw, P, sx + x, sy + y, 0, 0)
+#define WRITE(P) for (u32 y = 0; y < h; y++) \
+        for (u32 x = 0; x < w; x++) vram_rw(dbp, dbw, P, dx + x, dy + y, 1, tmp[y * w + x])
+    EACH_PSM(spsm, READ);
+    EACH_PSM(dpsm, WRITE);
+#undef READ
+#undef WRITE
+#undef EACH_PSM
     pages_written(dbp, ((dbw ? dbw : 1) * 64 * (dy + h) * (u32)psm_bits(dpsm) / 8 + 255) / 256);
 }
 

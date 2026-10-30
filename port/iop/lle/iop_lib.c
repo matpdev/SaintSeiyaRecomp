@@ -12,6 +12,7 @@
  * sound thread (clock_main) advances as it makes samples; the CPU delivers them between instructions
  * (iop_lle_poll) on a context of its own, or the clock thread does when the CPU is idle.
  */
+#define _GNU_SOURCE   /* pthread_setname_np */
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -276,6 +277,9 @@ static void n_StartThread(IopCpu *cpu) {
         pthread_attr_init(&a);
         pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
         pthread_create(&h, &a, thread_main, (void *)(intptr_t)i);
+        char name[16];
+        snprintf(name, sizeof name, "iop-%d", i);
+        pthread_setname_np(h, name);
         pthread_attr_destroy(&a);
         th[i].host = 1;
     }
@@ -910,5 +914,6 @@ void iop_lle_clock_start(void) {
     cri_audio_start();
     pthread_t h;
     pthread_create(&h, NULL, clock_main, NULL);
+    pthread_setname_np(h, "iop-clock");
     pthread_detach(h);
 }

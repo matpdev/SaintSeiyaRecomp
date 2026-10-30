@@ -51,6 +51,12 @@ typedef struct Prog {
 static Prog *buckets[4096];
 static struct { u32 gen; Prog *p; } by_entry[NPAIRS];
 static u32 code_gen = 1;
+/* The programs found before, by what the whole code memory held and the entry: the game swaps the
+ * same overlays in and out many times a frame, and finding a program (reach + prog_key) costs a
+ * walk of the code memory. */
+static struct { u64 key; Prog *p; } seen[16384];
+static u32 code_hash_gen;
+static u64 code_hash;
 static u64 header_hash;         /* of the headers the programs are compiled with: part of the keys */
 static int enabled = -1;
 static char src_dir[PATH_MAX], cache_dir[PATH_MAX];
@@ -135,6 +141,21 @@ static u32 reach(const u8 *code, u32 entry, u8 *in) {
             if (t[p] && !in[p]) work[nw++] = p;
     }
     return count;
+}
+
+/* Of the whole code memory (16 KB): four independent lanes, so it takes well under a microsecond. */
+static u64 memory_hash(const u8 *code) {
+    u64 h[4] = {0x9E3779B97F4A7C15ull, 0xC2B2AE3D27D4EB4Full, 0x165667B19E3779F9ull, 0x27D4EB2F165667C5ull};
+    for (u32 i = 0; i < NPAIRS; i += 4)
+        for (int k = 0; k < 4; k++) {
+            u64 w;
+            memcpy(&w, code + (i + k) * 8, 8);
+            h[k] = (h[k] ^ w) * 0xFF51AFD7ED558CCDull;
+            h[k] ^= h[k] >> 32;
+        }
+    u64 r = header_hash;
+    for (int k = 0; k < 4; k++) { r = (r ^ h[k]) * 0xC4CEB9FE1A85EC53ull; r ^= r >> 29; }
+    return r;
 }
 
 static u64 prog_key(const u8 *code, u32 entry, const u8 *in) {
@@ -928,6 +949,7 @@ static int setup(void) {
     for (int k = 0; k < threads; k++) {
         pthread_t t;
         pthread_create(&t, NULL, compiler, NULL);
+        pthread_setname_np(t, "vu-compiler");
         pthread_detach(t);
     }
     return 1;
@@ -940,12 +962,27 @@ static ProgFn find(Vu *v) {
         Prog *p = by_entry[entry].p;
         return p && __atomic_load_n(&p->state, __ATOMIC_ACQUIRE) == 1 ? p->fn : NULL;
     }
-    static u8 in[NPAIRS];
     u64 tl = perf_stamp();
+    if (code_hash_gen != code_gen) {
+        code_hash_gen = code_gen;
+        code_hash = memory_hash(v->code);
+    }
+    u64 sk = (code_hash ^ entry) * 0x9E3779B97F4A7C15ull;
+    u32 slot = sk >> 50;
+    while (seen[slot].p && seen[slot].key != sk) slot = (slot + 1) % 16384;
+    Prog *p = seen[slot].p;
+    if (p) {
+        if (tl) { perf.jit_lookups++; perf.jit_lookup_ns += perf_since(tl); }
+        by_entry[entry].gen = code_gen;
+        by_entry[entry].p = p;
+        return __atomic_load_n(&p->state, __ATOMIC_ACQUIRE) == 1 ? p->fn : NULL;
+    }
+    static u8 in[NPAIRS];
     reach(v->code, entry, in);
     u64 key = prog_key(v->code, entry, in);
     if (tl) { perf.jit_lookups++; perf.jit_lookup_ns += perf_since(tl); }
-    Prog **b = &buckets[key % 4096], *p = *b;
+    Prog **b = &buckets[key % 4096];
+    p = *b;
     while (p && p->key != key) p = p->next;
     if (!p) {
         p = calloc(1, sizeof *p);
@@ -966,6 +1003,12 @@ static ProgFn find(Vu *v) {
             pthread_cond_signal(&qcond);
             pthread_mutex_unlock(&qlock);
         }
+    }
+    static u32 nseen;
+    if (nseen < 16384 * 3 / 4) {        /* full: no more remembered (the old way still finds them) */
+        nseen++;
+        seen[slot].key = sk;
+        seen[slot].p = p;
     }
     by_entry[entry].gen = code_gen;
     by_entry[entry].p = p;

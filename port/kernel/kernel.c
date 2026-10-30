@@ -329,6 +329,9 @@ static void start_host(int id) {
     pthread_attr_init(&a);
     pthread_attr_setstacksize(&a, 64 << 20);    /* deep guest call chains run on the host stack */
     pthread_create(&t->host, &a, thread_main, (void *)(intptr_t)id);
+    char name[16];
+    snprintf(name, sizeof name, "ee-%d", id);
+    pthread_setname_np(t->host, name);
     pthread_attr_destroy(&a);
 }
 
@@ -624,6 +627,7 @@ void kernel_init(void) {
     iop_init();
     pthread_t timer;
     pthread_create(&timer, NULL, timer_main, NULL);
+    pthread_setname_np(timer, "vblank");
 }
 
 void kernel_run(u32 entry) {

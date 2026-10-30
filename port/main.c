@@ -7,6 +7,7 @@
  * Loads the executable's data into guest RAM (the code itself is the recompiled C linked into this
  * program) and starts the main thread at the ELF entry point.
  */
+#define _GNU_SOURCE   /* pthread_setname_np */
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,6 +85,7 @@ int main(int argc, char **argv) {
     pthread_attr_init(&a);
     pthread_attr_setstacksize(&a, 64 << 20);
     pthread_create(&game, &a, game_main, NULL);
+    pthread_setname_np(game, "game");
     if (nshots) return display_shots(shots, nshots);
     return display_window();
 }
