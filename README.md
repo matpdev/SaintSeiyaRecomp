@@ -40,8 +40,9 @@ does not work.
 - GCC, Python 3, `glslc` (the `shaderc` package), SDL3 (3.2 or newer) and a Vulkan driver
   - Arch: `sudo pacman -S gcc python shaderc sdl3 vulkan-icd-loader` (plus your GPU's driver)
   - Debian/Ubuntu: `sudo apt install gcc python3-venv glslc libsdl3-dev libvulkan1`
-- GCC is also used **while the game runs**: VU1 programs are compiled to native code the first time they
-  appear and cached in `~/.cache/sstheh/vu` (the first seconds of each new effect may stutter)
+- GCC is also used for the game's VU1 programs: they are compiled to native code from the executable,
+  ahead of time (`build/sstheh --compile-vu`, which `compilar.sh` runs, about 40 s), and kept in
+  `~/.cache/sstheh/vu`; any missing ones are compiled in the background when the game starts
 
 ### 2. Build and play
 

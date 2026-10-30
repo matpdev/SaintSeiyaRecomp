@@ -2,6 +2,7 @@
  * Saint Seiya: The Hades, native: entry point.
  *
  *     sstheh [SLES_541.62] [--iso game.iso] [-q | -v]
+ *     sstheh --compile-vu     compile the VU1 programs ahead of time, then exit
  *
  * Loads the executable's data into guest RAM (the code itself is the recompiled C linked into this
  * program) and starts the main thread at the ELF entry point.
@@ -21,6 +22,7 @@ void prof_start(void);
 void perf_calibrate(void);
 int display_shots(const int *at, int n);
 void display_set_presses(const char *spec);
+int vu_jit_ahead(int wait, int *queued);
 
 static u32 entry;
 
@@ -33,7 +35,7 @@ static void *game_main(void *arg) {
 
 int main(int argc, char **argv) {
     const char *elf = "disc/SLES_541.62", *iso = "disc/game.iso";
-    int shots[64], nshots = 0;
+    int shots[64], nshots = 0, compile_vu = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-q")) rt_verbose = 0;
         else if (!strcmp(argv[i], "-v")) rt_verbose = 2;
@@ -48,6 +50,7 @@ int main(int argc, char **argv) {
             }
         }
         else if (!strcmp(argv[i], "--iso") && i + 1 < argc) iso = argv[++i];
+        else if (!strcmp(argv[i], "--compile-vu")) compile_vu = 1;
         else elf = argv[i];
     }
     if (cdvd_open(iso)) {
@@ -60,6 +63,14 @@ int main(int argc, char **argv) {
         return 1;
     }
     rt_log("main", "loaded %s, entry %08X", elf, entry);
+    {
+        /* the VU1 programs not compiled yet are compiled in the background from the start */
+        int queued, n = vu_jit_ahead(compile_vu, &queued);
+        if (compile_vu) {
+            printf("%d VU1 programs, %d compiled now\n", n, queued);
+            return n ? 0 : 1;
+        }
+    }
     perf_calibrate();
     prof_start();
     {

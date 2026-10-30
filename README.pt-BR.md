@@ -39,8 +39,9 @@ jogo está neste repositório. A tradução brasileira de fãs é outro build (c
 - GCC, Python 3, `ninja`, `glslc` (pacote `shaderc`), SDL3 (3.2 ou mais nova) e um driver Vulkan
   - Arch: `sudo pacman -S gcc python ninja shaderc sdl3 vulkan-icd-loader` (mais o driver da sua placa)
   - Debian/Ubuntu: `sudo apt install gcc python3-venv ninja-build glslc libsdl3-dev libvulkan1`
-- o GCC também é usado **enquanto o jogo roda**: os programas de VU1 são compilados para código nativo na primeira
-  vez que aparecem e guardados em `~/.cache/sstheh/vu` (os primeiros segundos de cada efeito novo podem engasgar)
+- o GCC também é usado para os programas de VU1 do jogo: eles são compilados para código nativo a partir do
+  executável, antes de jogar (`build/sstheh --compile-vu`, que o `compilar.sh` roda, uns 40 s), e guardados em
+  `~/.cache/sstheh/vu`; os que faltarem são compilados em segundo plano quando o jogo abre
 
 ### 2. Compilar e jogar
 

@@ -6,7 +6,8 @@
  * one is seen it is written as C (one block per pair, calling the interpreter's inline upper() and
  * lower() with constants, so the compiler specialises them), compiled with gcc in the background
  * into a shared object kept in ~/.cache/sstheh/vu, and loaded; until then the interpreter runs it.
- * Compiled programs from earlier sessions are loaded as soon as their program is seen.
+ * Compiled programs from earlier sessions are loaded as soon as their program is seen. The game's
+ * programs are also found in its executable and compiled ahead of time (vu_jit_ahead, at the end).
  *
  * A translated program returns 0 when it ends (E bit), or 1 when it jumps to a pair outside the
  * pairs it was translated with (an indirect jump): v->pc is where to go on.
@@ -42,6 +43,7 @@ typedef struct Prog {
     volatile int state;         /* 0 compiling, 1 ready, 2 failed */
     ProgFn fn;
     char *source;               /* C to compile (freed when done) */
+    u8 *image, *in;             /* or the code and pairs to write it from (ahead of time) */
     struct Prog *next, *queue_next;
 } Prog;
 
@@ -55,6 +57,8 @@ static char src_dir[PATH_MAX], cache_dir[PATH_MAX];
 static pthread_mutex_t qlock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t qcond = PTHREAD_COND_INITIALIZER;
 static Prog *queue_head, *queue_tail;
+static Prog *ahead_head, *ahead_tail;   /* compiled ahead of time: after the ones the game waits for */
+static int ahead_left;
 
 void vu_jit_code_changed(void) { code_gen++; }
 
@@ -656,11 +660,18 @@ static void *compiler(void *arg) {
     (void)arg;
     for (;;) {
         pthread_mutex_lock(&qlock);
-        while (!queue_head) pthread_cond_wait(&qcond, &qlock);
-        Prog *p = queue_head;
-        queue_head = p->queue_next;
-        if (!queue_head) queue_tail = NULL;
+        while (!queue_head && !ahead_head) pthread_cond_wait(&qcond, &qlock);
+        int ahead = !queue_head;
+        Prog *p = ahead ? ahead_head : queue_head;
+        if (ahead) { ahead_head = p->queue_next; if (!ahead_head) ahead_tail = NULL; }
+        else { queue_head = p->queue_next; if (!queue_head) queue_tail = NULL; }
         pthread_mutex_unlock(&qlock);
+        if (!p->source) {
+            p->source = generate(p->image, p->entry / 8, p->in);
+            free(p->image);
+            free(p->in);
+            p->image = p->in = NULL;
+        }
 
         char c_path[PATH_MAX + 32], so_path[PATH_MAX + 32], tmp_path[PATH_MAX + 48], cmd[4 * PATH_MAX + 256];
         snprintf(c_path, sizeof c_path, "%s/%016llx.c", cache_dir, (unsigned long long)p->key);
@@ -671,15 +682,16 @@ static void *compiler(void *arg) {
         free(p->source);
         p->source = NULL;
         snprintf(cmd, sizeof cmd,
-                 "gcc -O2 -march=native -fno-strict-aliasing -w -shared -fPIC -I'%s/port/runtime' -I'%s/port/gs' -o '%s' '%s' -lm",
-                 src_dir, src_dir, tmp_path, c_path);
+                 "%sgcc -O2 -march=native -fno-strict-aliasing -w -shared -fPIC -I'%s/port/runtime' -I'%s/port/gs' -o '%s' '%s' -lm",
+                 ahead ? "nice -n 10 " : "", src_dir, src_dir, tmp_path, c_path);
         if (!f || system(cmd) != 0 || rename(tmp_path, so_path) != 0) {
             rt_log("vujit", "compiling %s failed", c_path);
             __atomic_store_n(&p->state, 2, __ATOMIC_RELEASE);
-            continue;
+        } else {
+            load(p, so_path);
+            rt_log("vujit", "program at %03X compiled (%016llx)%s", p->entry, (unsigned long long)p->key, ahead ? " ahead of time" : "");
         }
-        load(p, so_path);
-        rt_log("vujit", "program at %03X compiled (%016llx)", p->entry, (unsigned long long)p->key);
+        if (ahead) __atomic_sub_fetch(&ahead_left, 1, __ATOMIC_RELEASE);
     }
     return NULL;
 }
@@ -797,4 +809,121 @@ int vu_jit_run(Vu *v) {
         }
     }
     return 0;
+}
+
+/* ------------------------------------------------------------------------------- ahead of time
+ *
+ * All the game's VU1 code is in its executable: DMA packets of MPGs at 0x3C6F80. The first packet
+ * is the resident part (from 0); each of the others is an overlay the game loads right after it.
+ * For the resident part alone and with each overlay, the programs are taken from where they can
+ * start: the first pair, the pair after each program's end (E bit) or JR (the next subroutine),
+ * where JALRs return, and the constants put in integer registers (where JR goes). Those not compiled yet are compiled in the background, after
+ * the ones the game is waiting for. */
+
+#define MICROCODE_AT 0x3C6F80u
+#define MICROCODE_LEN 62848u
+
+/* Writes the MPGs of the DMA packet at pk into code[] (at base + their address); the end of what
+ * was written (bytes), and the packet's size in *size. */
+static u32 packet_mpgs(const u8 *pk, u32 room, u8 *code, u32 base, u32 *size) {
+    u64 tag;
+    memcpy(&tag, pk, 8);
+    u32 nw = 2 + (u32)(tag & 0xFFFF) * 4, end = 0;
+    *size = 16 + (u32)(tag & 0xFFFF) * 16;
+    if (*size > room) return 0;
+    const u8 *w = pk + 8;
+    for (u32 i = 0; i < nw;) {
+        u32 vc;
+        memcpy(&vc, w + i * 4, 4);
+        i++;
+        u32 cmd = (vc >> 24) & 0x7F, num = (vc >> 16) & 0xFF, imm = vc & 0xFFFF;
+        if (cmd == 0x4A) {
+            u32 n = num ? num : 256, at = base + imm * 8;
+            if (i + n * 2 > nw || at + n * 8 > 0x4000) return end;
+            memcpy(code + at, w + i * 4, n * 8);
+            if (at + n * 8 > end) end = at + n * 8;
+            i += n * 2;
+        } else if (cmd != 0x00 && cmd != 0x10 && cmd != 0x11 && cmd != 0x13) return end;   /* only MPGs, NOPs, FLUSHes */
+    }
+    return end;
+}
+
+static u32 ahead_image(const u8 *code, u32 from, u32 to, u64 *seen, u32 nseen_max, u32 *nseen) {
+    u32 starts[NPAIRS], ns = 0, queued = 0;
+    static u8 hit[NPAIRS];
+    memset(hit, 0, sizeof hit);
+#define START(x) do { u32 x_ = (x); if (x_ < to && !hit[x_]) { hit[x_] = 1; starts[ns++] = x_; } } while (0)
+    START(from);
+    for (u32 p = from; p < to; p++) {
+        u32 lo = rd_word(code, p, 0), hi = rd_word(code, p, 1);
+        if (hi & 0x40000000u) START(p + 2);
+        if (hi >> 31) continue;
+        if ((lo >> 25) == 0x08) START(((lo >> 10) & 0x7800) | (lo & 0x7FF));   /* IADDIU */
+        if (is_jump(lo)) START(p + 2);              /* the next subroutine after a JR; where a JALR returns */
+    }
+#undef START
+    static u8 in[NPAIRS];
+    for (u32 k = 0; k < ns; k++) {
+        reach(code, starts[k], in);
+        u64 key = prog_key(code, starts[k], in);
+        u32 j = 0;
+        while (j < *nseen && seen[j] != key) j++;
+        if (j < *nseen || *nseen == nseen_max) continue;
+        seen[(*nseen)++] = key;
+        char so_path[PATH_MAX + 32];
+        snprintf(so_path, sizeof so_path, "%s/%016llx.so", cache_dir, (unsigned long long)key);
+        if (access(so_path, R_OK) == 0) continue;
+        Prog **b = &buckets[key % 4096], *p = *b;
+        while (p && p->key != key) p = p->next;
+        if (p) continue;
+        p = calloc(1, sizeof *p);
+        p->key = key;
+        p->entry = starts[k] * 8;
+        p->image = malloc(0x4000);
+        memcpy(p->image, code, 0x4000);
+        p->in = malloc(NPAIRS);
+        memcpy(p->in, in, NPAIRS);
+        p->next = *b;
+        *b = p;
+        pthread_mutex_lock(&qlock);
+        if (ahead_tail) ahead_tail->queue_next = p;
+        else ahead_head = p;
+        ahead_tail = p;
+        __atomic_add_fetch(&ahead_left, 1, __ATOMIC_RELEASE);
+        pthread_cond_signal(&qcond);
+        pthread_mutex_unlock(&qlock);
+        queued++;
+    }
+    return queued;
+}
+
+/* Before the game starts (the program table is the game thread's afterwards). wait: until all
+ * are compiled. How many programs there are, and in *queued how many are being compiled. */
+int vu_jit_ahead(int wait, int *queued) {
+    *queued = 0;
+    if (enabled < 0) enabled = setup();
+    if (!enabled) return 0;
+    const u8 *pk = rt_ram + MICROCODE_AT;
+    static u8 code[0x4000];
+    static u64 seen[8192];
+    u32 nseen = 0, size;
+    memset(code, 0, sizeof code);
+    u32 base_end = packet_mpgs(pk, MICROCODE_LEN, code, 0, &size);
+    if (!base_end || base_end % 8) { rt_log("vujit", "no VU1 code at %08X", MICROCODE_AT); return 0; }
+    static u8 resident[0x4000];
+    memcpy(resident, code, sizeof resident);
+    *queued += (int)ahead_image(code, 0, base_end / 8, seen, 8192, &nseen);
+    int overlays = 0;
+    for (u32 off = size; off + 16 <= MICROCODE_LEN; off += size) {
+        memcpy(code, resident, sizeof code);
+        u32 end = packet_mpgs(pk + off, MICROCODE_LEN - off, code, base_end, &size);
+        if (!size) break;
+        if (end <= base_end) continue;
+        overlays++;
+        *queued += (int)ahead_image(code, 0, end / 8, seen, 8192, &nseen);
+    }
+    rt_log("vujit", "%u VU1 programs (resident code and %d overlays), %d to compile", nseen, overlays, *queued);
+    if (wait)
+        while (__atomic_load_n(&ahead_left, __ATOMIC_ACQUIRE) > 0) usleep(20000);
+    return (int)nseen;
 }
