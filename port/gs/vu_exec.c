@@ -296,3 +296,19 @@ void vu_start(int id, int addr, u32 itop) {
 void vu_stats(void) {
     rt_log("vu", "%llu programs, %llu instruction pairs", (unsigned long long)programs_run, (unsigned long long)pairs_run);
 }
+
+/* gsrec.c: VU1's state and memories saved (save = 1) or loaded. */
+void vu_state_io(FILE *f, int save) {
+#define IO(p, n) (save ? (void)fwrite(p, 1, n, f) : (void)!fread(p, 1, n, f))
+    Vu *v = &vus[1];
+    u8 *mem = v->mem, *code = v->code;
+    IO(v, sizeof *v);
+    v->mem = mem;
+    v->code = code;
+    IO(&vu1_top, sizeof vu1_top);
+    IO(&vu1_itop, sizeof vu1_itop);
+    IO(vu1_mem, sizeof vu1_mem);
+    IO(vu1_code, sizeof vu1_code);
+    if (!save) vu_code_written(1, 0, sizeof vu1_code);
+#undef IO
+}

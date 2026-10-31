@@ -892,6 +892,56 @@ static void put_vertex(const Vertex *v, u32 z_shift, const Vertex *colour_of, in
 
 static int gs_cur_path;             /* GIF path of the data being interpreted (1..3) */
 
+/* The vertices of a primitive, as triangles. */
+static void put_prim(int type, const Vertex *v, u32 zs, int gouraud, int fst) {
+    switch (type) {
+    case 3: case 4: case 5: {                   /* triangle */
+        const Vertex *flat = gouraud ? NULL : &v[2];
+        for (int i = 0; i < 3; i++) put_vertex(&v[i], zs, flat, fst);
+        break;
+    }
+    case 6: {                                   /* sprite: corners from the two vertices */
+        Vertex q[4] = {v[0], v[1], v[0], v[1]};
+        q[2].x = v[1].x; q[2].s = v[1].s; q[2].u = v[1].u;          /* top right */
+        q[3].x = v[0].x; q[3].s = v[0].s; q[3].u = v[0].u;          /* bottom left */
+        q[2].y = v[0].y; q[2].t = v[0].t; q[2].v = v[0].v;
+        q[3].y = v[1].y; q[3].t = v[1].t; q[3].v = v[1].v;
+        for (int i = 0; i < 4; i++) { q[i].z = v[1].z; q[i].q = v[1].q; }
+        const Vertex *order[6] = {&q[0], &q[2], &q[3], &q[2], &q[1], &q[3]};
+        for (int i = 0; i < 6; i++) put_vertex(order[i], zs, &v[1], fst);
+        break;
+    }
+    default: {                                  /* point / line: a thin quad */
+        Vertex a = v[0], b = type == 0 ? v[0] : v[1];
+        Vertex q[4] = {a, b, a, b};
+        q[0].x -= 0.5f; q[2].x += 0.5f; q[1].x -= 0.5f; q[3].x += 0.5f;
+        q[0].y -= 0.5f; q[1].y += 0.5f; q[2].y -= 0.5f; q[3].y += 0.5f;
+        const Vertex *order[6] = {&q[0], &q[1], &q[2], &q[2], &q[1], &q[3]};
+        for (int i = 0; i < 6; i++) put_vertex(order[i], zs, &b, fst);
+        break;
+    }
+    }
+}
+
+/* For widescreen. 2D on the screen: drawn from the EE (path 2/3; the 3D comes from VU1), whole
+   triangles or sprites over the whole frame width (the scissor), not from a render target (post
+   effects) and not untextured over the whole width (fades, clears). A picture at the sides:
+   anything else textured, or 3D, reaching outside the middle 3/4 of the frame width. From the
+   vertices since `first`. */
+static void classify(GpuDraw *d, int type, u32 first) {
+    float x0 = 1e9f, x1 = -1e9f;
+    for (u32 i = first; i < rec->nverts; i++) {
+        if (rec->verts[i].x < x0) x0 = rec->verts[i].x;
+        if (rec->verts[i].x > x1) x1 = rec->verts[i].x;
+    }
+    u32 fw = d->fbw * 64;
+    int full_scissor = d->scissor[0] == 0 && d->scissor[1] + 1 >= fw;
+    d->flat2d = 0;
+    if (gs_cur_path != 1 && type >= 3 && d->tex >= -1 && full_scissor)
+        d->flat2d = d->textured || x0 > 0 || x1 < (float)fw;
+    d->sides = !d->flat2d && (d->tex >= 0 || gs_cur_path == 1) && full_scissor && (x0 < fw / 8.0f || x1 > fw * 7 / 8.0f);
+}
+
 /* One primitive (points become 1-pixel quads, lines 1-pixel-wide quads, sprites two triangles). */
 static void record(int ctx, int type, const Vertex *v) {
     pthread_mutex_lock(&rec_lock);
@@ -939,49 +989,25 @@ static void record(int ctx, int type, const Vertex *v) {
     d->fba = gs.fba[ctx] & 1;
     d->first = rec->nverts;
     u32 zs = d->zpsm == 0 ? 32 : d->zpsm == 1 ? 24 : 16;
-    int fst = d->fst, gouraud = (gs.prim >> 3) & 1;
-    switch (type) {
-    case 3: case 4: case 5: {                   /* triangle */
-        const Vertex *flat = gouraud ? NULL : &v[2];
-        for (int i = 0; i < 3; i++) put_vertex(&v[i], zs, flat, fst);
-        break;
-    }
-    case 6: {                                   /* sprite: corners from the two vertices */
-        Vertex q[4] = {v[0], v[1], v[0], v[1]};
-        q[2].x = v[1].x; q[2].s = v[1].s; q[2].u = v[1].u;          /* top right */
-        q[3].x = v[0].x; q[3].s = v[0].s; q[3].u = v[0].u;          /* bottom left */
-        q[2].y = v[0].y; q[2].t = v[0].t; q[2].v = v[0].v;
-        q[3].y = v[1].y; q[3].t = v[1].t; q[3].v = v[1].v;
-        for (int i = 0; i < 4; i++) { q[i].z = v[1].z; q[i].q = v[1].q; }
-        const Vertex *order[6] = {&q[0], &q[2], &q[3], &q[2], &q[1], &q[3]};
-        for (int i = 0; i < 6; i++) put_vertex(order[i], zs, &v[1], fst);
-        break;
-    }
-    default: {                                  /* point / line: a thin quad */
-        Vertex a = v[0], b = type == 0 ? v[0] : v[1];
-        Vertex q[4] = {a, b, a, b};
-        q[0].x -= 0.5f; q[2].x += 0.5f; q[1].x -= 0.5f; q[3].x += 0.5f;
-        q[0].y -= 0.5f; q[1].y += 0.5f; q[2].y -= 0.5f; q[3].y += 0.5f;
-        const Vertex *order[6] = {&q[0], &q[1], &q[2], &q[2], &q[1], &q[3]};
-        for (int i = 0; i < 6; i++) put_vertex(order[i], zs, &b, fst);
-        break;
-    }
-    }
+    put_prim(type, v, zs, (gs.prim >> 3) & 1, d->fst);
     d->count = rec->nverts - d->first;
-    /* For widescreen. 2D on the screen: drawn from the EE (path 2/3; the 3D comes from VU1), whole
-       triangles or sprites over the whole frame width (the scissor), not from a render target
-       (post effects) and not untextured over the whole width (fades, clears). A picture at the
-       sides: anything else textured, or 3D, reaching outside the middle 3/4 of the frame width. */
-    float x0 = 1e9f, x1 = -1e9f;
-    for (u32 i = d->first; i < rec->nverts; i++) {
-        if (rec->verts[i].x < x0) x0 = rec->verts[i].x;
-        if (rec->verts[i].x > x1) x1 = rec->verts[i].x;
+    classify(d, type, d->first);
+    /* the same state as the draw before, its vertices right after: one draw (the GPU keeps their
+       order); not one reading a render target, which may need a copy of it before each draw */
+    GpuDraw *prev = rec->ndraws ? d - 1 : NULL;
+    if (prev && d->tex >= -1 && prev->first + prev->count == d->first) {
+        u32 first = d->first, count = d->count;
+        d->first = prev->first;
+        d->count = prev->count;
+        if (!memcmp(prev, d, sizeof *d)) {
+            prev->count += count;
+            rt_fbp[d->fbp & 511] = 1;
+            pthread_mutex_unlock(&rec_lock);
+            return;
+        }
+        d->first = first;
+        d->count = count;
     }
-    u32 fw = d->fbw * 64;
-    int full_scissor = d->scissor[0] == 0 && d->scissor[1] + 1 >= fw;
-    if (gs_cur_path != 1 && type >= 3 && d->tex >= -1 && full_scissor)
-        d->flat2d = d->textured || x0 > 0 || x1 < (float)fw;
-    d->sides = !d->flat2d && (d->tex >= 0 || gs_cur_path == 1) && full_scissor && (x0 < fw / 8.0f || x1 > fw * 7 / 8.0f);
     rec->ndraws++;
     rt_fbp[d->fbp & 511] = 1;
     pthread_mutex_unlock(&rec_lock);
@@ -1311,7 +1337,6 @@ static u32 gif(GifState *st, const u8 *p, u32 qwc, int stop_at_eop) {
 u32 kernel_vblank_count(void);
 
 void gif_path1(const u8 *vu_mem, u32 addr) {
-    static u8 buf[0x4000 * 2];
     static int told;
     u32 a = (addr & 0x3FF) * 16;
     static int want = -2, dumped;
@@ -1333,12 +1358,11 @@ void gif_path1(const u8 *vu_mem, u32 addr) {
                (unsigned long long)t[0], (unsigned long long)t[1], (unsigned)(t[0] & 0x7FFF), (unsigned)((t[0] >> 15) & 1),
                (unsigned)((t[0] >> 46) & 1), (unsigned)((t[0] >> 47) & 0x7FF), (unsigned)((t[0] >> 58) & 3), (unsigned)((t[0] >> 60) & 15));
     }
-    memcpy(buf, vu_mem + a, 0x4000 - a);
-    memcpy(buf + (0x4000 - a), vu_mem, a);
     paths[0].tag_lo = 0;
     paths[0].loops = 0;
     u64 t = perf_stamp();
-    gif(&paths[0], buf, 0x400, 1);
+    /* in place; a packet that runs past the end of VU memory goes on from its start */
+    if (gif(&paths[0], vu_mem + a, (0x4000 - a) / 16, 1) == (0x4000 - a) / 16 && a) gif(&paths[0], vu_mem, a / 16, 1);
     if (t) perf.gs_ns += perf_since(t);
 }
 
@@ -1391,4 +1415,21 @@ u64 gs_stats_tags(void) { return gif_tags; }
 void gs_dump_vram(u32 *out) {
     for (u32 y = 0; y < 1024; y++)
         for (u32 x = 0; x < 1024; x++) out[y * 1024 + x] = vram_rw(0, 16, 0, x, y, 0, 0) | 0xFF000000u;
+}
+
+/* gsrec.c: the GS's state saved (save = 1) or loaded, for a recording replayed off line. */
+void gs_state_io(FILE *f, int save) {
+#define IO(p, n) (save ? (void)fwrite(p, 1, n, f) : (void)!fread(p, 1, n, f))
+    IO(&gs, sizeof gs);
+    IO(vram, sizeof vram);
+    IO(page_gen, sizeof page_gen);
+    IO(rt_fbp, sizeof rt_fbp);
+    IO(paths, sizeof paths);
+    IO(&gs_cur_path, sizeof gs_cur_path);
+    IO(&tbuf_len, sizeof tbuf_len);
+    IO(&tbuf_need, sizeof tbuf_need);
+    if (!save && tbuf_len > tbuf_cap) { tbuf_cap = tbuf_len; tbuf = realloc(tbuf, tbuf_cap); }
+    IO(tbuf, tbuf_len);
+    if (!save) vram_writes++;
+#undef IO
 }

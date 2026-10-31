@@ -121,6 +121,7 @@ vertical blanks, no window). Environment variables:
 | `SSTHEH_VUJIT=0`, `SSTHEH_GSTHREAD=0`, `SSTHEH_UPLOAD_DEDUP=0` | turn optimizations off (to compare when something looks wrong) |
 | `SSTHEH_PERF_LOG=1` | print what the F3 panel shows to the terminal |
 | `SSTHEH_VUREC=file` | record 20 vertical blanks of VU1 programs (from `SSTHEH_VUREC_FROM`, default 8000) for `tools/vubench.c`, which checks and times their translation |
+| `SSTHEH_GSREC=file` | record the GS thread's work: its state, then everything it is given for `SSTHEH_GSREC_FRAMES` pictures shown (150) from vertical blank `SSTHEH_GSREC_FROM` (9000). `build/sstheh --gs-replay file [warm]` replays it without the game: time per frame and a hash of what is drawn (run it from `build/`, where the VU1 programs are found) |
 
 ### Known issues
 

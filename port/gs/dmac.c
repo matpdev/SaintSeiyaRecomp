@@ -48,9 +48,13 @@ static const u8 *mem(u32 addr, int spr) {
     return rt_ptr(addr & 0x01FFFFF0);
 }
 
+void gsrec_data(int ch, int tag, const u8 *p, u32 bytes);    /* gsrec.c */
+void gsrec_flip(void);
+
 static void deliver(Ctx *c, int ch, const u8 *data, u32 qwc) {
     (void)c;
     if (!data || !qwc) return;
+    gsrec_data(ch, 0, data, qwc * 16);
     if (ch == 2) gif_dma(data, qwc);
     else if (ch == 1) vif1_dma(data, qwc);
     else if (ch == 0) vif0_dma(data, qwc);
@@ -67,7 +71,10 @@ static void run_chain(Ctx *c, int ch) {
         memcpy(&tag, t, 8);
         u32 qwc = tag & 0xFFFF, id = (tag >> 28) & 7, addr = (u32)(tag >> 32) & 0x7FFFFFF0, spr = tag >> 63;
         int irq = (tag >> 31) & 1;
-        if (tte && (ch == 0 || ch == 1)) vif_tag(ch, t + 8);   /* the tag's upper half: two VIF codes */
+        if (tte && (ch == 0 || ch == 1)) {                      /* the tag's upper half: two VIF codes */
+            gsrec_data(ch, 1, t + 8, 8);
+            vif_tag(ch, t + 8);
+        }
         r[0] = (r[0] & 0xFFFF) | (u32)(tag & 0xFFFF0000);       /* CHCR.TAG = upper 16 bits of the tag */
         u32 next = tadr + 16;
         switch (id) {
@@ -179,6 +186,7 @@ static void *gs_thread(void *arg) {
         int ch = queue[qhead];
         pthread_mutex_unlock(&qlock);
         if (ch == JOB_FLIP) {
+            gsrec_flip();
             gpu_seal_frame();
             pthread_mutex_lock(&qlock);
             qhead = (qhead + 1) % 64;

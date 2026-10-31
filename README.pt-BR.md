@@ -119,6 +119,7 @@ indicados, sem janela). Variáveis de ambiente:
 | `SSTHEH_VUJIT=0`, `SSTHEH_GSTHREAD=0`, `SSTHEH_UPLOAD_DEDUP=0` | desligam otimizações (para comparar se algo sair errado) |
 | `SSTHEH_PERF_LOG=1` | escreve no terminal o que o painel F3 mostra |
 | `SSTHEH_VUREC=arquivo` | grava 20 vblanks de programas de VU1 (a partir de `SSTHEH_VUREC_FROM`, padrão 8000) para o `tools/vubench.c`, que confere e cronometra a tradução deles |
+| `SSTHEH_GSREC=arquivo` | grava o trabalho da thread do GS: o estado dela e tudo o que ela recebe por `SSTHEH_GSREC_FRAMES` imagens mostradas (150) a partir do vblank `SSTHEH_GSREC_FROM` (9000). `build/sstheh --gs-replay arquivo [aquecimento]` repete isso sem o jogo: tempo por frame e um hash do que é desenhado (rode a partir de `build/`, onde os programas de VU1 estão) |
 
 ### Problemas conhecidos
 

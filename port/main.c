@@ -3,6 +3,7 @@
  *
  *     sstheh [SLES_541.62] [--iso game.iso] [-q | -v]
  *     sstheh --compile-vu     compile the VU1 programs ahead of time, then exit
+ *     sstheh --gs-replay file [warm]   replay a recording of the GS thread's work (port/gs/gsrec.c)
  *
  * Loads the executable's data into guest RAM (the code itself is the recompiled C linked into this
  * program) and starts the main thread at the ELF entry point.
@@ -24,6 +25,7 @@ void perf_calibrate(void);
 int display_shots(const int *at, int n);
 void display_set_presses(const char *spec);
 int vu_jit_ahead(int wait, int *queued);
+int gsrec_replay(const char *path, int warm);
 
 static u32 entry;
 
@@ -36,7 +38,8 @@ static void *game_main(void *arg) {
 
 int main(int argc, char **argv) {
     const char *elf = "disc/SLES_541.62", *iso = "disc/game.iso";
-    int shots[64], nshots = 0, compile_vu = 0;
+    int shots[64], nshots = 0, compile_vu = 0, warm = 30;
+    const char *replay = NULL;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-q")) rt_verbose = 0;
         else if (!strcmp(argv[i], "-v")) rt_verbose = 2;
@@ -52,6 +55,10 @@ int main(int argc, char **argv) {
         }
         else if (!strcmp(argv[i], "--iso") && i + 1 < argc) iso = argv[++i];
         else if (!strcmp(argv[i], "--compile-vu")) compile_vu = 1;
+        else if (!strcmp(argv[i], "--gs-replay") && i + 1 < argc) {
+            replay = argv[++i];
+            if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9') warm = atoi(argv[++i]);
+        }
         else elf = argv[i];
     }
     if (cdvd_open(iso)) {
@@ -73,6 +80,7 @@ int main(int argc, char **argv) {
         }
     }
     perf_calibrate();
+    if (replay) return gsrec_replay(replay, warm);
     prof_start();
     {
         extern int gpu_on;

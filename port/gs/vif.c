@@ -142,3 +142,9 @@ void vif_stats(void) {
         if (n) rt_log("vif", "VIF%d commands:%s", k, line);
     }
 }
+
+/* gsrec.c: VIF1's state saved (save = 1) or loaded. */
+void vif_state_io(FILE *f, int save) {
+    if (save) fwrite(&vifs[1], sizeof vifs[1], 1, f);
+    else if (fread(&vifs[1], sizeof vifs[1], 1, f) != 1) memset(vifs[1].counts, 0, sizeof vifs[1].counts);
+}
