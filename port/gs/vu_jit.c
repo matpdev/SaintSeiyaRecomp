@@ -5,7 +5,9 @@
  * up to the pair after an E bit), identified by the entry and a hash of those pairs. The first time
  * one is seen it is written as C (one block per pair, calling the interpreter's inline upper() and
  * lower() with constants, so the compiler specialises them), compiled with gcc in the background
- * into a shared object kept in ~/.cache/sstheh/vu, and loaded; until then the interpreter runs it.
+ * into a shared object kept in ~/.cache/sstheh/vu/<version>, and loaded; until then the interpreter
+ * runs it. What other versions (of the generator, the headers, the compiler flags) left there is
+ * removed at start.
  * Compiled programs from earlier sessions are loaded as soon as their program is seen. The game's
  * programs are also found in its executable and compiled ahead of time (vu_jit_ahead, at the end).
  *
@@ -17,9 +19,12 @@
  * found next to the executable (build/..).
  */
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <dlfcn.h>
+#include <errno.h>
 #include <limits.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,7 +39,8 @@
 #include "perf.h"
 
 #define NPAIRS (0x4000 / 8)
-#define GEN_VERSION 12          /* of the C written and how it is compiled: part of the keys */
+#define GEN_VERSION 12          /* of the C written: part of the keys */
+#define CC_FLAGS "-O2 -march=native -fno-strict-aliasing -ffp-contract=off -w -shared -fPIC"   /* also */
 
 typedef int (*ProgFn)(Vu *v);
 
@@ -57,7 +63,7 @@ static u32 code_gen = 1;
 static struct { u64 key; Prog *p; } seen[16384];
 static u32 code_hash_gen;
 static u64 code_hash;
-static u64 header_hash;         /* of the headers the programs are compiled with: part of the keys */
+static u64 header_hash;         /* of the headers and flags the programs are compiled with: part of the keys */
 static int enabled = -1;
 static char src_dir[PATH_MAX], cache_dir[PATH_MAX];
 
@@ -892,7 +898,7 @@ static void *compiler(void *arg) {
         free(p->source);
         p->source = NULL;
         snprintf(cmd, sizeof cmd,
-                 "%sgcc -O2 -march=native -fno-strict-aliasing -ffp-contract=off -w -shared -fPIC -I'%s/port/runtime' -I'%s/port/gs' -o '%s' '%s' -lm",
+                 "%sgcc " CC_FLAGS " -I'%s/port/runtime' -I'%s/port/gs' -o '%s' '%s' -lm",
                  ahead ? "nice -n 10 " : "", src_dir, src_dir, tmp_path, c_path);
         if (!f || system(cmd) != 0 || rename(tmp_path, so_path) != 0) {
             rt_log("vujit", "compiling %s failed", c_path);
@@ -904,6 +910,52 @@ static void *compiler(void *arg) {
         if (ahead) __atomic_sub_fetch(&ahead_left, 1, __ATOMIC_RELEASE);
     }
     return NULL;
+}
+
+/* A subdirectory of the VU cache named as a version's: 16 hex digits. */
+static int version_name(const char *s) {
+    if (strlen(s) != 16) return 0;
+    for (int k = 0; k < 16; k++)
+        if (!((s[k] >= '0' && s[k] <= '9') || (s[k] >= 'a' && s[k] <= 'f'))) return 0;
+    return 1;
+}
+
+/* A file the cache keeps: a program's C or shared object, or a compile's temporary .so. */
+static int cache_file(const char *s) {
+    size_t n = strlen(s);
+    return (n > 2 && !strcmp(s + n - 2, ".c")) || (n > 3 && !strcmp(s + n - 3, ".so"));
+}
+
+/* Removes from dir (~/.cache/sstheh/vu) the other versions' subdirectories and the programs kept
+ * directly in it before there were versions, and from the current one (the subdirectory current)
+ * the temporary files of compiles whose process is gone. A program another version is still
+ * running stays mapped; what that version compiles afterwards is interpreted. */
+static void clean_cache(const char *dir, const char *current) {
+    DIR *d = opendir(dir);
+    if (!d) return;
+    char path[PATH_MAX + 64], file[2 * PATH_MAX + 64];
+    u32 removed = 0;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+        if (cache_file(e->d_name)) { removed += unlink(path) == 0; continue; }
+        if (!version_name(e->d_name)) continue;
+        int mine = !strcmp(e->d_name, current);
+        DIR *sub = opendir(path);
+        if (!sub) continue;
+        struct dirent *f;
+        while ((f = readdir(sub))) {
+            if (!cache_file(f->d_name)) continue;
+            int pid;
+            if (mine && (sscanf(f->d_name, "%*16[0-9a-f].%d.so", &pid) != 1 || kill(pid, 0) == 0 || errno != ESRCH)) continue;
+            snprintf(file, sizeof file, "%s/%s", path, f->d_name);
+            removed += unlink(file) == 0;
+        }
+        closedir(sub);
+        if (!mine) rmdir(path);
+    }
+    closedir(d);
+    if (removed) rt_log("vujit", "%u old files removed from %s", removed, dir);
 }
 
 static int setup(void) {
@@ -934,6 +986,7 @@ static int setup(void) {
         while ((ch = fgetc(f)) != EOF) header_hash = (header_hash ^ (u8)ch) * 0x100000001B3ull;
         fclose(f);
     }
+    for (const char *c = CC_FLAGS; *c; c++) header_hash = (header_hash ^ (u8)*c) * 0x100000001B3ull;
     const char *home = getenv("XDG_CACHE_HOME");
     char base[PATH_MAX];
     if (home && *home) snprintf(base, sizeof base, "%s", home);
@@ -943,6 +996,12 @@ static int setup(void) {
     mkdir(cache_dir, 0755);
     snprintf(cache_dir, sizeof cache_dir, "%s/sstheh/vu", base);
     mkdir(cache_dir, 0755);
+    char version[17], vu_dir[PATH_MAX];
+    snprintf(version, sizeof version, "%016llx", (unsigned long long)((header_hash ^ GEN_VERSION) * 0x100000001B3ull));
+    snprintf(vu_dir, sizeof vu_dir, "%s", cache_dir);
+    snprintf(cache_dir, sizeof cache_dir, "%s/%s", vu_dir, version);
+    mkdir(cache_dir, 0755);
+    clean_cache(vu_dir, version);
     long cpus = sysconf(_SC_NPROCESSORS_ONLN);
     int threads = cpus > 4 ? (int)(cpus / 2) : 2;
     if (threads > 8) threads = 8;
