@@ -34,6 +34,11 @@
 #define MAX_ALARMS 64
 #define RAM_END 0x02000000u
 #define KERNEL_SYSCALL_TABLE 0x80000800u  /* stand-in for the kernel's own table, in kernel RAM */
+/* Top of the stack interrupt handlers run on: in the kernel's RAM (0-0x7FFFF), like the real
+ * kernel's. It was at 0x01F00000, inside the game's heap (it gives out RAM up to the main thread's
+ * stack, 0x01F80000): each interrupt wrote ~0x140 bytes over what the game had there, which in
+ * fights was Aiacos's special moves (a garbled move crashed the fight in func_00155540). */
+#define IRQ_STACK_TOP 0x00080000u
 
 enum { T_FREE, T_DORMANT, T_READY, T_WAIT, T_SUSPEND };
 enum { W_NONE, W_SLEEP, W_SEMA };
@@ -234,8 +239,7 @@ static void run_interrupts(void) {
     iop_kick(&irq_ctx);                             /* calls the IOP's modules queued for the EE */
     if (!timer_vblank && !iop_pending() && !dmac_pending) return;
     in_irq = 1;
-    /* irq_ctx gets its own stack at the top of RAM, below the main thread's area */
-    irq_ctx.r[29].d[0] = RAM_END - 0x100000;
+    irq_ctx.r[29].d[0] = IRQ_STACK_TOP;
     if (iop_pending()) iop_deliver(&irq_ctx, raise_sif0);
     while (dmac_pending) {
         int ch = __builtin_ctz(dmac_pending);
