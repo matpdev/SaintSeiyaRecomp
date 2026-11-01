@@ -17,6 +17,7 @@
 # game
 0x002A78D0 hle_frame_lines      # scanlines this frame has used, for the time-sliced loaders: see port/hle/frame.c
 0x002BFA80 hle_video_mode       # sets the video mode (D_0050022C): 1 (NTSC, 60 Hz) instead of the region's 2 (PAL): see port/hle/frame.c
+0x002C3740 hle_movie_step       # the opening video's scene step: played with FFmpeg instead of Sofdec + the IPU: see port/hle/movie.c
 0x00138B20 hle_set_frame_wait   # scenes asking for a frame per two vertical blanks run at the full rate: see port/hle/frame.c
 # libmc2: the worker's synchronous command functions, on a folder (see port/hle/memcard.c)
 0x00132320 hle_mc2_getinfo

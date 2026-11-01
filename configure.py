@@ -76,14 +76,28 @@ def main():
                depfile="$out.d", deps="gcc", description="cc $in")
         n.rule("cc_fast", f"gcc -c -O2 -g -w -fno-strict-aliasing -ffp-contract=off -march=native {inc} -MMD -MF $out.d $in -o $out",
                depfile="$out.d", deps="gcc", description="cc $in")
-        n.rule("link", "gcc -rdynamic $in -o $out -lm -lpthread -lSDL3 -ldl", description="link $out")
+        # FFmpeg plays the opening video (port/hle/movie.c); without it the video is skipped
+        def pkg(*args):
+            try:
+                return subprocess.run(["pkg-config", *args, "libavformat", "libavcodec", "libavutil", "libswscale", "libswresample"],
+                                      capture_output=True, text=True, check=True).stdout.strip()
+            except (OSError, subprocess.CalledProcessError):
+                return None
+        ff_libs = pkg("--libs")
+        ff_cflags = "-DSSTHEH_FFMPEG " + pkg("--cflags") if ff_libs is not None else ""
+        if ff_libs is None:
+            print("FFmpeg (libavformat, libavcodec, libavutil, libswscale, libswresample) not found: the opening video is skipped")
+        n.rule("cc_ffmpeg", f"gcc -c -O2 -g -w -fno-strict-aliasing -ffp-contract=off -march=native {inc} {ff_cflags} -MMD -MF $out.d $in -o $out",
+               depfile="$out.d", deps="gcc", description="cc $in")
+        n.rule("link", f"gcc -rdynamic $in -o $out -lm -lpthread -lSDL3 -ldl {ff_libs or ''}", description="link $out")
         rc_files = [f"build/recomp/rc_{k:03d}.c" for k in range(RC_FILES)] + ["build/recomp/functab.c"]
         n.build(rc_files, "recomp", code, implicit=["tools/recomp/recomp.py", "port/hle.txt"])
         port_srcs = sorted(glob.glob("port/**/*.c", recursive=True))
         port_objs = []
         for src in rc_files + port_srcs:
             o = "build/port/" + src.replace("/", "_")[:-2] + ".o"
-            n.build(o, "cc" if src.startswith("build/recomp/") else "cc_fast", src,
+            rule = "cc" if src.startswith("build/recomp/") else "cc_ffmpeg" if src == "port/hle/movie.c" else "cc_fast"
+            n.build(o, rule, src,
                     order_only=rc_files + ["build/shaders/shaders.h"])
             port_objs.append(o)
         # shaders: GLSL -> SPIR-V -> a header of byte arrays

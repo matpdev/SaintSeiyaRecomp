@@ -61,6 +61,8 @@ static SDL_GPUTexture *overlay;               /* the performance panel */
 #define BLUR_H 108
 static SDL_GPUTexture *blur;
 static int overlay_w, overlay_h, overlay_on;
+static SDL_GPUTexture *movie;                 /* the opening video's picture, shown instead of the game's */
+static int movie_w, movie_h, movie_on;
 
 /* ------------------------------------------------------------------------------- setup */
 
@@ -653,14 +655,13 @@ static SDL_GPUTexture *displayed(float rect[4], int *pw, int *ph) {
     return find_color(fbp);
 }
 
-void gpu_set_overlay(const u32 *px, int w, int h) {
-    if (!dev) return;
-    if (!px) { overlay_on = 0; return; }
-    if (!overlay || w != overlay_w || h != overlay_h) {
-        if (overlay) SDL_ReleaseGPUTexture(dev, overlay);
-        overlay = texture(w, h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
-        overlay_w = w;
-        overlay_h = h;
+/* An RGBA picture into *t (made or remade at w x h). */
+static void upload_picture(SDL_GPUTexture **t, int *tw, int *th, const u32 *px, int w, int h) {
+    if (!*t || w != *tw || h != *th) {
+        if (*t) SDL_ReleaseGPUTexture(dev, *t);
+        *t = texture(w, h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        *tw = w;
+        *th = h;
     }
     SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(dev);
     SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
@@ -670,7 +671,7 @@ void gpu_set_overlay(const u32 *px, int w, int h) {
     SDL_UnmapGPUTransferBuffer(dev, tb);
     SDL_GPUTextureTransferInfo src = {tb, 0, (u32)w, (u32)h};
     SDL_GPUTextureRegion dst = {0};
-    dst.texture = overlay;
+    dst.texture = *t;
     dst.w = (u32)w;
     dst.h = (u32)h;
     dst.d = 1;
@@ -678,7 +679,21 @@ void gpu_set_overlay(const u32 *px, int w, int h) {
     SDL_EndGPUCopyPass(cp);
     SDL_SubmitGPUCommandBuffer(cmd);
     SDL_ReleaseGPUTransferBuffer(dev, tb);
+}
+
+void gpu_set_overlay(const u32 *px, int w, int h) {
+    if (!dev) return;
+    if (!px) { overlay_on = 0; return; }
+    upload_picture(&overlay, &overlay_w, &overlay_h, px, w, h);
     overlay_on = 1;
+}
+
+/* The video's picture (RGBA) to show instead of the game's; NULL: the game's again. */
+void gpu_set_movie(const u32 *px, int w, int h) {
+    if (!dev) return;
+    if (!px) { movie_on = 0; return; }
+    upload_picture(&movie, &movie_w, &movie_h, px, w, h);
+    movie_on = 1;
 }
 
 /* The displayed picture into a window-sized texture (the swapchain's, or one for a shot). */
@@ -686,12 +701,20 @@ static void present_into(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *swap, u32 sw
     float rect[4];
     int w, h;
     SDL_GPUTexture *src = displayed(rect, &w, &h);
+    int is_movie = movie_on && movie;
+    if (is_movie) {                      /* a 4:3 picture of its own */
+        src = movie;
+        rect[0] = rect[1] = 0;
+        rect[2] = rect[3] = 1;
+        w = movie_w;
+        h = movie_h;
+    }
     /* widescreen with nothing drawn at the sides (a 4:3 picture: title, logos, story scenes): the
        sides show the picture itself, zoomed to the width and blurred (a plain background stays
        plain); it stays sharp in the middle. The blur is made small (a box of taps) and stretched. */
     int fill = 0;
     float mid[4];                        /* the middle 3/4 of the picture's width */
-    if (src && widescreen_on()) {
+    if (src && widescreen_on() && !is_movie) {
         fill = 1;
         for (int j = 0; j < ncolors; j++)
             if (colors[j].tex == src && colors[j].sides) fill = 0;
@@ -724,7 +747,7 @@ static void present_into(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *swap, u32 sw
     SDL_GPURenderPass *rp = SDL_BeginGPURenderPass(cmd, &ci, 1, NULL);
     if (src) {
         /* keep the picture's aspect (4:3, or 16:9 in widescreen) inside the window */
-        float aspect = widescreen_on() ? 16.0f / 9.0f : 4.0f / 3.0f, ww = (float)sw, wh = (float)sh;
+        float aspect = widescreen_on() && !is_movie ? 16.0f / 9.0f : 4.0f / 3.0f, ww = (float)sw, wh = (float)sh;
         float vw = ww, vh = ww / aspect;
         if (vh > wh) { vh = wh; vw = wh * aspect; }
         SDL_GPUViewport vp = {(ww - vw) / 2, (wh - vh) / 2, vw, vh, 0, 1};

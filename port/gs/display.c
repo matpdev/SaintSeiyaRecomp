@@ -23,6 +23,8 @@
 #include <sys/stat.h>
 
 void gpu_set_overlay(const u32 *px, int w, int h);   /* gpu_vk.c */
+void gpu_set_movie(const u32 *px, int w, int h);
+int movie_take(u32 *out, int max, int *w, int *h, u32 *gen);   /* port/hle/movie.c */
 
 int gs_display(u32 *out, int max_w, int max_h, int *w, int *h);
 void gs_init(void);
@@ -174,6 +176,18 @@ static GpuVertex *interpolate(const GpuFrame *a, const GpuFrame *b, float t) {
     return out;
 }
 
+/* The opening video (port/hle/movie.c): its newest picture to the GPU; 1 when what is shown changed. */
+static int movie_update(void) {
+    static u32 px[1024 * 1024], gen;
+    static int on;
+    int w, h;
+    u32 before = gen;
+    int now = movie_take(px, 1024 * 1024, &w, &h, &gen);
+    if (now && gen != before) { gpu_set_movie(px, w, h); on = 1; return 1; }
+    if (!now && on) { gpu_set_movie(NULL, 0, 0); on = 0; gen = 0; return 1; }
+    return 0;
+}
+
 int display_shots(const int *at, int n) {
     gs_init();
     if (gpu_on && (!SDL_Init(SDL_INIT_VIDEO) || gpu_init(NULL))) gpu_on = 0;
@@ -186,6 +200,7 @@ int display_shots(const int *at, int n) {
         }
         int w, h;
         gpu_vblank();
+        if (gpu_on) movie_update();
         static u32 *full;
         u32 *px = frame;
         int pw, ph;
@@ -202,6 +217,9 @@ int display_shots(const int *at, int n) {
             gpu_read_display(px, 4096, 4096, &w, &h);
         } else if (gpu_on) gpu_read_display(frame, 1024, 1024, &w, &h);
         else gs_display(frame, 1024, 1024, &w, &h);
+        u32 movie_gen = 0;
+        int mw, mh;
+        if (px != full && movie_take(frame, 1024 * 1024, &mw, &mh, &movie_gen)) { px = frame; w = mw; h = mh; }   /* the opening video */
         char path[64];
         snprintf(path, sizeof path, "build/shot_%04d.ppm", at[k]);
         save_ppm(path, px, w, h);
@@ -418,6 +436,7 @@ static int display_window_gpu(void) {
             static u32 last_overlay;
             if (vb - last_overlay >= 25) { last_overlay = vb; overlay_update(); }
         }
+        if (movie_update()) final_shown = 0;
         GpuFrame *f;
         u64 now = SDL_GetTicksNS();
         while ((f = gpu_next_frame())) {
@@ -474,7 +493,10 @@ int display_window(void) {
         if (vb == shown) { SDL_Delay(2); continue; }
         shown = vb;
         int w, h;
-        gs_display(frame, 1024, 1024, &w, &h);
+        static u32 movie_gen;
+        static int mw, mh;
+        if (movie_take(frame, 1024 * 1024, &mw, &mh, &movie_gen)) { w = mw; h = mh; }   /* the opening video */
+        else { movie_gen = 0; gs_display(frame, 1024, 1024, &w, &h); }
         if (!tex || w != tw || h != th) {
             if (tex) SDL_DestroyTexture(tex);
             tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, w, h);

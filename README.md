@@ -37,9 +37,10 @@ does not work.
 
 ### 1. Requirements (Linux x86-64)
 
-- GCC, Python 3, `glslc` (the `shaderc` package), SDL3 (3.2 or newer) and a Vulkan driver
-  - Arch: `sudo pacman -S gcc python shaderc sdl3 vulkan-icd-loader` (plus your GPU's driver)
-  - Debian/Ubuntu: `sudo apt install gcc python3-venv glslc libsdl3-dev libvulkan1`
+- GCC, Python 3, `glslc` (the `shaderc` package), SDL3 (3.2 or newer), a Vulkan driver and FFmpeg's
+  libraries (for the opening video; without them it is skipped)
+  - Arch: `sudo pacman -S gcc python shaderc sdl3 vulkan-icd-loader ffmpeg` (plus your GPU's driver)
+  - Debian/Ubuntu: `sudo apt install gcc python3-venv glslc libsdl3-dev libvulkan1 libavformat-dev libavcodec-dev libswscale-dev libswresample-dev`
 - GCC is also used for the game's VU1 programs: they are compiled to native code from the executable,
   ahead of time (`build/sstheh --compile-vu`, which `compilar.sh` runs, about 20 s), and kept in
   `~/.cache/sstheh/vu`; any missing ones are compiled in the background when the game starts

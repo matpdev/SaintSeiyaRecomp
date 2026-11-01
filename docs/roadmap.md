@@ -15,7 +15,7 @@ one.
 | IOP HLE | SIF RPC to the IOP's services: files (cdvd/fileio), controller, memory card, CRI ADXI sound | `port/iop/`, `port/hle/` |
 | IOP LLE | The game's sound driver (SSD/RSSD) run from the disc: MIPS I interpreter, IRX loader, SPU2 | `port/iop/lle/` |
 | Graphics | DMA → VIF → GIF → GS; VU1 microcode translated to native code; Vulkan renderer | `port/gs/` (based on Tenkaichi3Decomp's `port/src/gs`, MIT) |
-| Video | Sofdec/MPEG-2 through the IPU (cutscenes) | later |
+| Video | The opening (the only video: Sofdec MPEG-2) played with FFmpeg instead of Sofdec + the IPU | `port/hle/movie.c` |
 
 ## Milestones
 
@@ -33,8 +33,8 @@ one.
 **Updated 2026-10-15:** milestones 1 to 6 done. The game runs natively from the title screen to 3D fights,
 with music and voices (CRI ADXI), sound effects (the disc's own SSD/RSSD driver on an emulated IOP and SPU2),
 controller (PADMAN) and memory card (libmc2 on a folder). Vulkan renderer through SDL3 GPU, VU1 programs
-translated to native code, 60 Hz with interpolated frames. Left: videos (milestone 7), SPU2 reverb, and full
-playthrough testing.
+translated to native code, 60 Hz with interpolated frames. Left: SPU2 reverb and full playthrough testing.
+The opening video plays since 2026-11-01 (FFmpeg).
 
 ### History
 
