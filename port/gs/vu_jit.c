@@ -34,7 +34,7 @@
 #include "perf.h"
 
 #define NPAIRS (0x4000 / 8)
-#define GEN_VERSION 11          /* of the C written: part of the keys */
+#define GEN_VERSION 12          /* of the C written and how it is compiled: part of the keys */
 
 typedef int (*ProgFn)(Vu *v);
 
@@ -892,7 +892,7 @@ static void *compiler(void *arg) {
         free(p->source);
         p->source = NULL;
         snprintf(cmd, sizeof cmd,
-                 "%sgcc -O2 -march=native -fno-strict-aliasing -w -shared -fPIC -I'%s/port/runtime' -I'%s/port/gs' -o '%s' '%s' -lm",
+                 "%sgcc -O2 -march=native -fno-strict-aliasing -ffp-contract=off -w -shared -fPIC -I'%s/port/runtime' -I'%s/port/gs' -o '%s' '%s' -lm",
                  ahead ? "nice -n 10 " : "", src_dir, src_dir, tmp_path, c_path);
         if (!f || system(cmd) != 0 || rename(tmp_path, so_path) != 0) {
             rt_log("vujit", "compiling %s failed", c_path);

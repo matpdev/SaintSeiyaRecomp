@@ -2,7 +2,7 @@
  * VU1 bench: runs again, through the translated programs (port/gs/vu_jit.c), the VU1 programs
  * recorded in a game with SSTHEH_VUREC=file, and checks or times them.
  *
- *     gcc -O2 -march=native -rdynamic -Iport/runtime -Iport/gs -o build/vubench tools/vubench.c \
+ *     gcc -O2 -march=native -ffp-contract=off -rdynamic -Iport/runtime -Iport/gs -o build/vubench tools/vubench.c \
  *         port/gs/vu_jit.c port/gs/vu_exec.c -lm
  *     build/vubench rec.bin check      each run ends as it did in the game (registers, data memory)
  *     build/vubench rec.bin time [N]   cycles per program entry (best of N runs, default 5)
