@@ -10,5 +10,6 @@ enum {
 
 extern volatile u16 pad_buttons[2];
 extern volatile u8 pad_sticks[2][4];
+extern volatile int pad_second;   /* a controller in port 2 (a second gamepad, SSTHEH_PAD2=1) */
 void pad_open(u32 port, u32 slot, u32 ee_area);
 void pad_vblank(Ctx *c);

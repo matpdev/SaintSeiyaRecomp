@@ -12,8 +12,8 @@
  *   answers only then).
  * Buttons (bit of the 16-bit word, active low): SELECT 0, L3 1, R3 2, START 3, UP 4, RIGHT 5,
  * DOWN 6, LEFT 7, L2 8, R2 9, L1 10, R1 11, TRIANGLE 12, CIRCLE 13, CROSS 14, SQUARE 15.
- * Only port 1 has a controller unless SSTHEH_PAD2=1: with both, game modes become 1P vs 2P. An
- * empty port reports state 0 (PAD_STATE_DISCONN).
+ * Port 2 has a controller when a second gamepad is connected (port/gs/display.c) or SSTHEH_PAD2=1:
+ * with both, game modes become 1P vs 2P. An empty port reports state 0 (PAD_STATE_DISCONN).
  */
 #include <stdlib.h>
 #include <stdio.h>
@@ -28,6 +28,7 @@ static u32 area[2];               /* EE buffer per port, 0 = not open */
 static u32 frame;
 volatile u16 pad_buttons[2];      /* pressed buttons per port, set by the window (1 = pressed) */
 volatile u8 pad_sticks[2][4] = {{0x80, 0x80, 0x80, 0x80}, {0x80, 0x80, 0x80, 0x80}};
+volatile int pad_second;
 
 void pad_open(u32 port, u32 slot, u32 ee_area) {
     if (port < 2 && slot == 0) {
@@ -48,7 +49,7 @@ void pad_vblank(Ctx *c) {
         u8 r[128] = {0};
         static int pad2 = -1;
         if (pad2 < 0) pad2 = getenv("SSTHEH_PAD2") && atoi(getenv("SSTHEH_PAD2"));
-        if (port == 1 && !pad2) {
+        if (port == 1 && !pad2 && !pad_second) {
             r[0x00] = 0xFF;
             memcpy(r + 0x58, &frame, 4);
             r[0x70] = 0;                     /* PAD_STATE_DISCONN */

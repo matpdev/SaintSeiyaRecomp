@@ -90,9 +90,30 @@ static u16 keyboard(void) {
     return b;
 }
 
-static SDL_Gamepad *gamepad;
+/* Gamepads: the first plays port 1 (with the keyboard), the second port 2. */
+static SDL_Gamepad *gamepads[2];
 
-static u16 gamepad_buttons(void) {
+static void gamepad_event(const SDL_Event *e) {
+    if (e->type == SDL_EVENT_GAMEPAD_ADDED) {
+        for (int k = 0; k < 2; k++)
+            if (!gamepads[k]) {
+                gamepads[k] = SDL_OpenGamepad(e->gdevice.which);
+                rt_log("pad", "gamepad %d: %s", k + 1, gamepads[k] ? SDL_GetGamepadName(gamepads[k]) : SDL_GetError());
+                break;
+            }
+    } else if (e->type == SDL_EVENT_GAMEPAD_REMOVED) {
+        for (int k = 0; k < 2; k++)
+            if (gamepads[k] && SDL_GetGamepadID(gamepads[k]) == e->gdevice.which) {
+                SDL_CloseGamepad(gamepads[k]);
+                gamepads[k] = NULL;
+                rt_log("pad", "gamepad %d removed", k + 1);
+            }
+    }
+    pad_second = gamepads[1] != NULL;
+}
+
+static u16 gamepad_buttons(int k) {
+    SDL_Gamepad *gamepad = gamepads[k];
     if (!gamepad) return 0;
     static const struct { SDL_GamepadButton b; u16 bit; } map[] = {
         {SDL_GAMEPAD_BUTTON_SOUTH, PAD_CROSS}, {SDL_GAMEPAD_BUTTON_EAST, PAD_CIRCLE},
@@ -109,8 +130,13 @@ static u16 gamepad_buttons(void) {
     if (SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16000) b |= PAD_R2;
     static const SDL_GamepadAxis axes[4] = {SDL_GAMEPAD_AXIS_RIGHTX, SDL_GAMEPAD_AXIS_RIGHTY,
                                            SDL_GAMEPAD_AXIS_LEFTX, SDL_GAMEPAD_AXIS_LEFTY};
-    for (int i = 0; i < 4; i++) pad_sticks[0][i] = (u8)((SDL_GetGamepadAxis(gamepad, axes[i]) + 32768) >> 8);
+    for (int i = 0; i < 4; i++) pad_sticks[k][i] = (u8)((SDL_GetGamepadAxis(gamepad, axes[i]) + 32768) >> 8);
     return b;
+}
+
+static void poll_pads(void) {
+    pad_buttons[0] = keyboard() | gamepad_buttons(0) | scripted(kernel_vblank_count());
+    pad_buttons[1] = gamepad_buttons(1);
 }
 static u32 crt_interlace, crt_mode, crt_field;
 
@@ -421,13 +447,13 @@ static int display_window_gpu(void) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) { SDL_Quit(); _exit(0); }
-            if (e.type == SDL_EVENT_GAMEPAD_ADDED && !gamepad) gamepad = SDL_OpenGamepad(e.gdevice.which);
+            gamepad_event(&e);
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F1 && !e.key.repeat) win_size_next(win);
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F2 && !e.key.repeat) widescreen_toggle();
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F3) panel_on = !panel_on;
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F4) gpu_set_vsync(!gpu_vsync());
         }
-        pad_buttons[0] = keyboard() | gamepad_buttons() | scripted(kernel_vblank_count());
+        poll_pads();
         u32 vb = kernel_vblank_count();
         if (vb != last_vb) {
             last_vb = vb;
@@ -484,11 +510,11 @@ int display_window(void) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) { SDL_Quit(); _exit(0); }
-            if (e.type == SDL_EVENT_GAMEPAD_ADDED && !gamepad) gamepad = SDL_OpenGamepad(e.gdevice.which);
+            gamepad_event(&e);
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F1 && !e.key.repeat) win_size_next(win);
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F3) panel_on = !panel_on;
         }
-        pad_buttons[0] = keyboard() | gamepad_buttons() | scripted(kernel_vblank_count());
+        poll_pads();
         u32 vb = kernel_vblank_count();
         if (vb == shown) { SDL_Delay(2); continue; }
         shown = vb;
