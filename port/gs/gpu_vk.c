@@ -361,6 +361,18 @@ static u64 up_bytes, up_count;
 static SDL_GPUTransferBuffer *txfer;        /* texture uploads */
 static u32 txfer_size;              /* texture uploads since the last stats line */
 
+/* Widescreen: is this 2D drawn 3/4 as wide around the centre (kept 4:3)? Not when it crosses the
+   whole width over 3D reaching the sides: a band, a fade or a flash meant to cover the screen, it
+   is stretched to 16:9 with the 3D (on a picture of only 2D, a title or an illustration, it stays
+   4:3 and the sides are filled by present_into). */
+static int frame_wide_3d(const GpuFrame *f) {
+    for (u32 i = 0; i < f->ndraws; i++)
+        if (f->draws[i].sides) return 1;
+    return 0;
+}
+
+static int kept_43(const GpuDraw *d, int wide_3d) { return d->flat2d && !(wide_3d && d->fullw); }
+
 static void upload_verts(SDL_GPUCommandBuffer *cmd, GpuFrame *f, const GpuVertex *verts) {
     SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
     u32 vbytes = f->nverts * sizeof(GpuVertex);
@@ -380,13 +392,15 @@ static void upload_verts(SDL_GPUCommandBuffer *cmd, GpuFrame *f, const GpuVertex
         GpuVertex *m = SDL_MapGPUTransferBuffer(dev, vxfer, true);
         memcpy(m, verts ? verts : f->verts, vbytes);
         /* widescreen: the picture is shown 4/3 wider, so 2D is drawn 3/4 as wide around the centre */
-        if (widescreen_on())
+        if (widescreen_on()) {
+            int wide_3d = frame_wide_3d(f);
             for (u32 i = 0; i < f->ndraws; i++) {
                 const GpuDraw *d = &f->draws[i];
-                if (!d->flat2d) continue;
+                if (!kept_43(d, wide_3d)) continue;
                 float c = (float)(d->fbw * 32);
                 for (u32 k = d->first; k < d->first + d->count; k++) m[k].x = c + (m[k].x - c) * 0.75f;
             }
+        }
         SDL_UnmapGPUTransferBuffer(dev, vxfer);
         SDL_GPUTransferBufferLocation src = {vxfer, 0};
         SDL_GPUBufferRegion dst = {vbuf, 0, vbytes};
@@ -532,6 +546,7 @@ void gpu_render(GpuFrame *f, const GpuVertex *verts) {
     float last_fix = -1.0f;
     DrawUniforms last_u;
     int have_u = 0;
+    int wide_3d = frame_wide_3d(f);
     u32 drawn[MAX_RT];                  /* frame buffers drawn in this frame, and whether at the sides */
     int drawn_sides[MAX_RT], ndrawn = 0;
     for (u32 i = 0; i < f->ndraws; i++) {
@@ -597,7 +612,7 @@ void gpu_render(GpuFrame *f, const GpuVertex *verts) {
         if (pipe != last_pipe) { SDL_BindGPUGraphicsPipeline(rp, pipe); last_pipe = pipe; }
         SDL_Rect sc = {(int)d->scissor[0] * scale, (int)d->scissor[2] * scale,
                        (int)(d->scissor[1] - d->scissor[0] + 1) * scale, (int)(d->scissor[3] - d->scissor[2] + 1) * scale};
-        if (d->flat2d && widescreen_on()) {     /* 2D kept 3/4 as wide: what was off the 4:3 screen stays off */
+        if (kept_43(d, wide_3d) && widescreen_on()) {     /* 2D kept 3/4 as wide: what was off the 4:3 screen stays off */
             float c = (float)(d->fbw * 32);
             int x0 = (int)((c + ((float)d->scissor[0] - c) * 0.75f) * scale);
             int x1 = (int)((c + ((float)d->scissor[1] + 1 - c) * 0.75f) * scale);

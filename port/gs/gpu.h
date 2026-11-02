@@ -34,6 +34,7 @@ typedef struct {
     u32 fba;
     u32 flat2d;                 /* 2D on the screen (menus, HUD): kept 4:3 in widescreen */
     u32 sides;                  /* draws a picture (not 2D, a clear or a post effect) at the 16:9 sides */
+    u32 fullw;                  /* 2D across the frame's whole width (a band, a fade, a flash) */
     u32 first, count;           /* vertices */
 } GpuDraw;
 

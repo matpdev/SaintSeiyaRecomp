@@ -643,7 +643,7 @@ void gpu_release_frame(GpuFrame *f) {
  * gs.c owns the textures' lifetime: entries are indices 1..GPU_MAX_TEX-1 (the GPU texture slot),
  * the least recently used go when there are too many bytes or no free entry, and the frame tells
  * the GPU side which to release. */
-typedef struct { u64 ckey[3]; u32 w, h, last, used; } TexEnt;
+typedef struct { u64 ckey[3]; u32 w, h, last, used, plain; } TexEnt;   /* plain: of about one colour */
 static TexEnt tex_ents[GPU_MAX_TEX];
 static u32 tex_free[GPU_MAX_TEX], ntex_free, tex_inited;
 static u64 tex_bytes;
@@ -856,6 +856,12 @@ static s32 texture_for(int ctx, u32 *w_out, u32 *h_out) {
         u64 name = texpack_name(px, tw, th);
         texpack_dump(name, px, tw, th);
         u32 uw = tw, uh = th, *rp = texpack_find(name, &uw, &uh);
+        tex_ents[idx].plain = 1;                 /* every texel within a few levels of the first */
+        for (u32 i = 1; i < tw * th && tex_ents[idx].plain; i++)
+            for (int sh = 0; sh < 32; sh += 8) {
+                int d = (int)((px[i] >> sh) & 0xFF) - (int)((px[0] >> sh) & 0xFF);
+                if (d > 8 || d < -8) { tex_ents[idx].plain = 0; break; }
+            }
         if (rp) {
             free(px);
             px = rp;
@@ -926,8 +932,10 @@ static void put_prim(int type, const Vertex *v, u32 zs, int gouraud, int fst) {
 /* For widescreen. 2D on the screen: drawn from the EE (path 2/3; the 3D comes from VU1), whole
    triangles or sprites over the whole frame width (the scissor), not from a render target (post
    effects) and not untextured over the whole width (fades, clears). A picture at the sides:
-   anything else textured, or 3D, reaching outside the middle 3/4 of the frame width. From the
-   vertices since `first`. */
+   anything else textured, or 3D, reaching outside the middle 3/4 of the frame width. 2D across the
+   whole width that is a band (up to ~1/3 of the height) or of one colour (a fade, a flash) is kept
+   apart: over 3D that reaches the sides it covers them too (gpu_vk.c); a picture across the width
+   (an illustration) keeps its shape. From the vertices since `first`. */
 static void classify(GpuDraw *d, int type, u32 first) {
     float x0 = 1e9f, x1 = -1e9f;
     for (u32 i = first; i < rec->nverts; i++) {
@@ -940,6 +948,16 @@ static void classify(GpuDraw *d, int type, u32 first) {
     if (gs_cur_path != 1 && type >= 3 && d->tex >= -1 && full_scissor)
         d->flat2d = d->textured || x0 > 0 || x1 < (float)fw;
     d->sides = !d->flat2d && (d->tex >= 0 || gs_cur_path == 1) && full_scissor && (x0 < fw / 8.0f || x1 > fw * 7 / 8.0f);
+    d->fullw = 0;
+    if (d->flat2d && x0 <= 0.5f && x1 >= (float)fw - 0.5f) {
+        float y0 = 1e9f, y1 = -1e9f;
+        for (u32 i = first; i < rec->nverts; i++) {
+            if (rec->verts[i].y < y0) y0 = rec->verts[i].y;
+            if (rec->verts[i].y > y1) y1 = rec->verts[i].y;
+        }
+        float fh = (float)(d->scissor[3] - d->scissor[2] + 1);
+        d->fullw = (y1 - y0) <= fh * 0.35f || !d->textured || (d->tex > 0 && tex_ents[d->tex].plain);
+    }
 }
 
 /* One primitive (points become 1-pixel quads, lines 1-pixel-wide quads, sprites two triangles). */
