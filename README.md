@@ -92,8 +92,23 @@ Options → Save/Load (answer "Yes" to create the save). The memory card in slot
 | F2 | widescreen 16:9 (default) or the original 4:3; remembered |
 | F3 | performance panel (logic and display fps, CPU use) |
 | F4 | toggles vsync |
+| F5 | training menu (also Select + Start on a gamepad): see below |
 
-Gamepads are picked up when they are connected.
+Gamepads are picked up when they are connected: the first plays with the keyboard as player 1, the second as player 2
+(two-player modes, e.g. 1P vs 2P in 1,000 Days War).
+
+### Training
+
+F5 (or Select + Start) opens a menu over the game; it drives with the pad (↑/↓, ✕ changes, ○ closes) and its
+choices are remembered. With *Training mode* on, in every fight:
+
+- *Opponent (computer)*: idle — a computer-played fighter stands still (moves already started finish); or plays as usual;
+- *Infinite life*: life comes back to full a second after the last hit, and a hit never knocks out;
+- *Show damage*: each fighter's life, the last hit's damage and the combo's (damage and hits);
+- *Show inputs*: player 1's inputs, newest first (direction in numpad notation, 5 = neutral, 6 = right), with the
+  frames each was held.
+
+Against a second player (second gamepad) the opponent is played by that pad.
 
 ### Options
 
@@ -106,13 +121,15 @@ vertical blanks, no window). Environment variables:
 | `SSTHEH_WINDOW=WxH` | window size at start, e.g. `2560x1440`, or `full` (default: 1920x1080, or the last one chosen with F1) |
 | `SSTHEH_WIDESCREEN=0` | original 4:3 picture (default: 16:9, a wider 3D view with menus and HUD kept in their 4:3 shapes; full-screen 4:3 art gets blurred sides) |
 | `SSTHEH_SHOT_PRESENT=WxH` | `--shot` saves the picture as a window that size shows it (widescreen, sides) instead of the PS2 frame |
-| `SSTHEH_TEX_DUMP=1` | save every texture the game uses as PNG in `~/.local/share/sstheh/textures/dump/` |
+| `SSTHEH_TEX_DUMP=1` | save every texture the game uses as PNG in `~/.local/share/sstheh/textures/dump/` (or `dump/` in the `SSTHEH_TEXTURES` folder) |
+| `SSTHEH_RAM_DUMP=1` | `--shot` also saves the EE's 32 MB as `build/ram_N.bin` (for finding the game's variables) |
 | `SSTHEH_TEXTURES=0` | don't use replacement textures (`~/.local/share/sstheh/textures/<name>.png`, any size; `tools/upscale_textures.sh` makes an HD pack with Real-ESRGAN) |
 | `SSTHEH_SCALE=n` | fixed render scale (1 to 8; default: follows the window size — 4 at 1080p, 5 at 4K) |
 | `SSTHEH_INTERP=0` | no interpolated frames (only the game's own) |
 | `SSTHEH_50HZ=1` | original PAL mode (50 Hz) |
 | `SSTHEH_30FPS_SCENES=1` | menus and 2D screens at 30 fps, as on the disc |
-| `SSTHEH_PAD2=1` | second controller (two-player modes) |
+| `SSTHEH_PAD2=1` | a controller in port 2 even without a second gamepad (two-player modes) |
+| `SSTHEH_TRAINING=1` / `=0` | training mode with every option on / off, for this run (default: the choices made in the F5 menu) |
 | `SSTHEH_UNLOCK_ALL=1` | cheat: unlocks everything (modes, characters, stages, extras); kept in the save once saved |
 | `SSTHEH_MEMCARD=folder` | where the memory card lives (default `~/.local/share/sstheh/memcard1`) |
 | `SSTHEH_AUDIO=0` | no sound |

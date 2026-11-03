@@ -5,10 +5,11 @@
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 out_color;
 layout(set = 2, binding = 0) uniform sampler2D src;
-layout(set = 3, binding = 0) uniform Down { vec4 down; };   // xy: a window pixel in uv; z: taps per axis
+layout(set = 3, binding = 0) uniform Down { vec4 down; };   // xy: a window pixel in uv; z: taps per axis;
+                                                            // w: 1 keeps the picture's alpha (layers over it)
 void main() {
     int n = int(down.z);
-    if (n <= 1) { out_color = vec4(texture(src, v_uv).rgb, 1.0); return; }
+    if (n <= 1) { vec4 t = texture(src, v_uv); out_color = vec4(t.rgb, down.w > 0.5 ? t.a : 1.0); return; }
     vec3 sum = vec3(0.0);
     for (int j = 0; j < n; j++)
         for (int i = 0; i < n; i++) {

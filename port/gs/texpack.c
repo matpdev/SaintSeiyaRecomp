@@ -4,7 +4,8 @@
  * A texture is named by its decoded content (RGBA pixels and size, 16 hex digits), the same
  * whatever GS memory it was read from and from one run to the next:
  *   SSTHEH_TEX_DUMP=1   each texture decoded for the first time is saved as
- *                       ~/.local/share/sstheh/textures/dump/<name>.png
+ *                       ~/.local/share/sstheh/textures/dump/<name>.png (dump/ of the folder
+ *                       SSTHEH_TEXTURES names, when it names one)
  *   textures/<name>.png is used instead of that texture, at any size (a 4x upscale, a repaint):
  *                       draws keep addressing it in the original's texels, so nothing else changes.
  * SSTHEH_TEXTURES=0 turns replacements off; SSTHEH_TEXTURES=<folder> takes them from elsewhere.
@@ -43,9 +44,9 @@ static void init(void) {
     const char *e = getenv("SSTHEH_TEX_DUMP");
     dump_on = e && atoi(e);
     e = getenv("SSTHEH_TEXTURES");
-    if (e && !strcmp(e, "0")) return;
-    if (e && *e) snprintf(dir, sizeof dir, "%s", e);
+    if (e && *e && strcmp(e, "0")) snprintf(dir, sizeof dir, "%s", e);
     else display_config_path(dir, sizeof dir, "textures");
+    if (e && !strcmp(e, "0")) return;
     mkdir(dir, 0755);
     DIR *d = opendir(dir);
     if (!d) return;
@@ -85,7 +86,7 @@ void texpack_dump(u64 name, const u32 *px, u32 w, u32 h) {
     if (nseen == cap_seen) seen = realloc(seen, (cap_seen = cap_seen ? cap_seen * 2 : 1024) * sizeof *seen);
     seen[nseen++] = name;
     char path[1200];
-    display_config_path(path, sizeof path, "textures");
+    snprintf(path, sizeof path, "%s", dir);
     mkdir(path, 0755);
     strcat(path, "/dump");
     mkdir(path, 0755);

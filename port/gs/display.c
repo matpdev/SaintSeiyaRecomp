@@ -134,8 +134,13 @@ static u16 gamepad_buttons(int k) {
     return b;
 }
 
+int training_key(int scancode);                      /* port/hle/training.c */
+u16 training_pad(u16 buttons);
+int training_hud(SDL_Surface *surf);
+void gpu_set_hud(const u32 *px, int w, int h);      /* gpu_vk.c */
+
 static void poll_pads(void) {
-    pad_buttons[0] = keyboard() | gamepad_buttons(0) | scripted(kernel_vblank_count());
+    pad_buttons[0] = training_pad(keyboard() | gamepad_buttons(0) | scripted(kernel_vblank_count()));
     pad_buttons[1] = gamepad_buttons(1);
 }
 static u32 crt_interlace, crt_mode, crt_field;
@@ -158,6 +163,7 @@ static void save_ppm(const char *path, const u32 *px, int w, int h) {
 }
 
 static void panel_update(void);
+static void hud_update(void);
 
 /* Headless: save the picture at each vertical blank listed (ascending), then exit. */
 /* GPU renderer, headless: take the frames sealed since the last call, show the newest */
@@ -220,8 +226,8 @@ int display_shots(const int *at, int n) {
     for (int k = 0; k < n; k++) {
         u32 seen = 0;
         while ((int)kernel_vblank_count() < at[k]) {
-            pad_buttons[0] = scripted(kernel_vblank_count());
-            if (kernel_vblank_count() != seen) { seen = kernel_vblank_count(); panel_update(); gpu_vblank(); }
+            pad_buttons[0] = training_pad(scripted(kernel_vblank_count()));
+            if (kernel_vblank_count() != seen) { seen = kernel_vblank_count(); panel_update(); hud_update(); gpu_vblank(); }
             usleep(2000);
         }
         int w, h;
@@ -258,6 +264,11 @@ int display_shots(const int *at, int n) {
                    (unsigned long long)gs_priv_read(0), (unsigned long long)gs_priv_read(0x70),
                    (unsigned long long)gs_priv_read(0x80), (unsigned long long)gs_priv_read(0x90),
                    (unsigned long long)gs_priv_read(0xA0));
+        }
+        if (getenv("SSTHEH_RAM_DUMP")) {        /* the EE's 32 MB at the same moment, for finding the game's variables */
+            snprintf(path, sizeof path, "build/ram_%04d.bin", at[k]);
+            FILE *f = fopen(path, "wb");
+            if (f) { fwrite(rt_ram, 1, 32u << 20, f); fclose(f); }
         }
         rt_log("gs", "%s (%dx%d), %llu primitives so far", path, w, h, (unsigned long long)gs_prims);
     }
@@ -415,6 +426,17 @@ static void panel_draw(SDL_Renderer *ren) {
     for (int i = 0; i < 4; i++) SDL_RenderDebugText(ren, 8, 8 + i * 10, panel.line[i]);
 }
 
+/* The training layer (port/hle/training.c), over the whole picture: 640 x 360, or 480 x 360 in 4:3. */
+static void hud_update(void) {
+    static SDL_Surface *surf[2];
+    if (!gpu_on) return;
+    int wide = widescreen_on();
+    if (!surf[wide]) surf[wide] = SDL_CreateSurface(wide ? 640 : 480, 360, SDL_PIXELFORMAT_ABGR8888);
+    static int was;
+    if (surf[wide] && training_hud(surf[wide])) { gpu_set_hud(surf[wide]->pixels, surf[wide]->w, surf[wide]->h); was = 1; }
+    else if (was) { gpu_set_hud(NULL, 0, 0); was = 0; }
+}
+
 /* Window: shows the displayed buffer at every vertical blank until it is closed. */
 static void overlay_update(void) {
     static SDL_Surface *surf;
@@ -452,6 +474,7 @@ static int display_window_gpu(void) {
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F2 && !e.key.repeat) widescreen_toggle();
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F3) panel_on = !panel_on;
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F4) gpu_set_vsync(!gpu_vsync());
+            if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) training_key(e.key.scancode);
         }
         poll_pads();
         u32 vb = kernel_vblank_count();
@@ -459,6 +482,7 @@ static int display_window_gpu(void) {
             last_vb = vb;
             gpu_vblank_tick();
             panel_update();
+            hud_update();
             static u32 last_overlay;
             if (vb - last_overlay >= 25) { last_overlay = vb; overlay_update(); }
         }

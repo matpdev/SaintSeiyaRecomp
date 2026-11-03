@@ -90,8 +90,23 @@ em `BESLES-54162GX/` e é carregado sozinho quando o jogo abre.
 | F2 | widescreen 16:9 (padrão) ou o 4:3 original; fica salvo |
 | F3 | painel de desempenho (fps da lógica e da tela, uso de CPU) |
 | F4 | liga/desliga o vsync |
+| F5 | menu de treino (também Select + Start num gamepad): veja abaixo |
 
-Controles de jogo (gamepad) são reconhecidos ao serem conectados.
+Controles de jogo (gamepad) são reconhecidos ao serem conectados: o primeiro joga junto com o teclado como jogador 1, o
+segundo como jogador 2 (modos de dois jogadores, ex. 1P vs 2P na Guerra dos Mil Dias).
+
+### Treino
+
+F5 (ou Select + Start) abre um menu por cima do jogo; ele é usado com o controle (↑/↓, ✕ muda, ○ fecha) e as
+escolhas ficam salvas. Com *Training mode* ligado, em toda luta:
+
+- *Opponent (computer)*: idle — um lutador jogado pelo computador fica parado (golpes já começados terminam); ou joga normalmente;
+- *Infinite life*: a vida volta ao máximo um segundo depois do último golpe, e nenhum golpe nocauteia;
+- *Show damage*: a vida de cada lutador, o dano do último golpe e o do combo (dano e golpes);
+- *Show inputs*: os comandos do jogador 1, o mais novo em cima (direção na notação do teclado numérico, 5 = neutro,
+  6 = direita), com os quadros que cada um durou.
+
+Contra um segundo jogador (segundo gamepad), o oponente é jogado por esse controle.
 
 ### Opções
 
@@ -104,13 +119,15 @@ indicados, sem janela). Variáveis de ambiente:
 | `SSTHEH_WINDOW=LxA` | tamanho da janela ao abrir, ex. `2560x1440`, ou `full` (padrão: 1920x1080, ou o último escolhido com F1) |
 | `SSTHEH_WIDESCREEN=0` | imagem 4:3 original (padrão: 16:9, o 3D com visão mais larga e menus e HUD nas proporções 4:3; artes 4:3 de tela cheia ganham laterais desfocadas) |
 | `SSTHEH_SHOT_PRESENT=LxA` | o `--shot` salva a imagem como uma janela desse tamanho mostra (widescreen, laterais) em vez do quadro do PS2 |
-| `SSTHEH_TEX_DUMP=1` | salva cada textura que o jogo usa como PNG em `~/.local/share/sstheh/textures/dump/` |
+| `SSTHEH_TEX_DUMP=1` | salva cada textura que o jogo usa como PNG em `~/.local/share/sstheh/textures/dump/` (ou `dump/` na pasta de `SSTHEH_TEXTURES`) |
+| `SSTHEH_RAM_DUMP=1` | o `--shot` também salva os 32 MB do EE em `build/ram_N.bin` (para achar variáveis do jogo) |
 | `SSTHEH_TEXTURES=0` | não usa texturas substitutas (`~/.local/share/sstheh/textures/<nome>.png`, de qualquer tamanho; `tools/upscale_textures.sh` gera um pacote HD com o Real-ESRGAN) |
 | `SSTHEH_SCALE=n` | escala de renderização fixa (1 a 8; padrão: acompanha o tamanho da janela — 4 em 1080p, 5 em 4K) |
 | `SSTHEH_INTERP=0` | sem quadros interpolados (mostra só os quadros do jogo) |
 | `SSTHEH_50HZ=1` | modo PAL original (50 Hz) |
 | `SSTHEH_30FPS_SCENES=1` | menus e telas 2D a 30 fps, como no disco |
-| `SSTHEH_PAD2=1` | segundo controle (modos de dois jogadores) |
+| `SSTHEH_PAD2=1` | um controle na porta 2 mesmo sem segundo gamepad (modos de dois jogadores) |
+| `SSTHEH_TRAINING=1` / `=0` | modo de treino com todas as opções ligadas / desligadas, só nesta execução (padrão: as escolhas do menu F5) |
 | `SSTHEH_UNLOCK_ALL=1` | cheat: libera tudo (modos, personagens, cenários, extras); salvando, fica no save |
 | `SSTHEH_MEMCARD=pasta` | onde fica o memory card (padrão `~/.local/share/sstheh/memcard1`) |
 | `SSTHEH_AUDIO=0` | sem som |

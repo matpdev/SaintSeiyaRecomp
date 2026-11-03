@@ -57,10 +57,12 @@ static Pipe pipes[2048];
 static int npipes;
 
 static SDL_GPUTexture *overlay;               /* the performance panel */
+static SDL_GPUTexture *hud;                   /* the training layer, over the whole picture */
 #define BLUR_W 192                            /* widescreen sides of a 4:3 picture, blurred (gpu_present) */
 #define BLUR_H 108
 static SDL_GPUTexture *blur;
 static int overlay_w, overlay_h, overlay_on;
+static int hud_w, hud_h, hud_on;
 static SDL_GPUTexture *movie;                 /* the opening video's picture, shown instead of the game's */
 static int movie_w, movie_h, movie_on;
 
@@ -703,6 +705,14 @@ void gpu_set_overlay(const u32 *px, int w, int h) {
     overlay_on = 1;
 }
 
+/* An RGBA layer stretched over the whole picture (training); NULL: none. */
+void gpu_set_hud(const u32 *px, int w, int h) {
+    if (!dev) return;
+    if (!px) { hud_on = 0; return; }
+    upload_picture(&hud, &hud_w, &hud_h, px, w, h);
+    hud_on = 1;
+}
+
 /* The video's picture (RGBA) to show instead of the game's; NULL: the game's again. */
 void gpu_set_movie(const u32 *px, int w, int h) {
     if (!dev) return;
@@ -760,12 +770,14 @@ static void present_into(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *swap, u32 sw
     ci.load_op = SDL_GPU_LOADOP_CLEAR;
     ci.store_op = SDL_GPU_STOREOP_STORE;
     SDL_GPURenderPass *rp = SDL_BeginGPURenderPass(cmd, &ci, 1, NULL);
+    SDL_GPUViewport picture_vp = {0, 0, (float)sw, (float)sh, 0, 1};
     if (src) {
         /* keep the picture's aspect (4:3, or 16:9 in widescreen) inside the window */
         float aspect = widescreen_on() && !is_movie ? 16.0f / 9.0f : 4.0f / 3.0f, ww = (float)sw, wh = (float)sh;
         float vw = ww, vh = ww / aspect;
         if (vh > wh) { vh = wh; vw = wh * aspect; }
         SDL_GPUViewport vp = {(ww - vw) / 2, (wh - vh) / 2, vw, vh, 0, 1};
+        picture_vp = vp;
         SDL_SetGPUViewport(rp, &vp);
         SDL_BindGPUGraphicsPipeline(rp, present_pipe);
         if (fill) {                      /* the blurred sides, then only the middle of the picture */
@@ -792,11 +804,21 @@ static void present_into(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *swap, u32 sw
         SDL_BindGPUFragmentSamplers(rp, 0, &tsb, 1);
         SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
     }
+    if (hud_on && hud && !is_movie) {
+        SDL_SetGPUViewport(rp, &picture_vp);
+        SDL_BindGPUGraphicsPipeline(rp, overlay_pipe);
+        float full[4] = {0, 0, 1, 1}, one[4] = {0, 0, 1, 1};
+        SDL_PushGPUVertexUniformData(cmd, 0, full, sizeof full);
+        SDL_PushGPUFragmentUniformData(cmd, 0, one, sizeof one);
+        SDL_GPUTextureSamplerBinding tsb = {hud, samplers[6]};
+        SDL_BindGPUFragmentSamplers(rp, 0, &tsb, 1);
+        SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+    }
     if (overlay_on && overlay) {
         SDL_GPUViewport vp = {4, 4, (float)overlay_w, (float)overlay_h, 0, 1};
         SDL_SetGPUViewport(rp, &vp);
         SDL_BindGPUGraphicsPipeline(rp, overlay_pipe);
-        float full[4] = {0, 0, 1, 1}, one[4] = {0, 0, 1, 0};
+        float full[4] = {0, 0, 1, 1}, one[4] = {0, 0, 1, 1};
         SDL_PushGPUVertexUniformData(cmd, 0, full, sizeof full);
         SDL_PushGPUFragmentUniformData(cmd, 0, one, sizeof one);
         SDL_GPUTextureSamplerBinding tsb = {overlay, samplers[6]};
