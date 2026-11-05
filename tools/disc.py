@@ -41,25 +41,25 @@ def main():
     try:
         f = open(iso, "rb")
     except OSError as e:
-        print(f"não consegui abrir {iso}: {e}")
+        print(f"can't open {iso}: {e}")
         return 1
     with f:
         hit = find(f, "SLES_541.62")
         if hit is None:
             f.seek(16 * SECTOR)
             if f.read(6)[1:6] != b"CD001":
-                print("isto não é uma imagem ISO 9660")
+                print("this is not an ISO 9660 image")
                 return 1
-            print("a imagem não tem SLES_541.62: precisa ser a versão europeia (SLES-54162)")
+            print("the image has no SLES_541.62: it must be the European release (SLES-54162)")
             return 2
         f.seek(hit[0] * SECTOR)
         data = f.read(hit[1])
     sha = hashlib.sha1(data).hexdigest()
     if sha != WANT:
-        print(f"SLES_541.62 com SHA-1 {sha}, esperado {WANT}: é outro build (a tradução de fãs não serve)")
+        print(f"SLES_541.62 has SHA-1 {sha}, expected {WANT}: another build (the fan translation does not work)")
         return 3
     Path(out).write_bytes(data)
-    print("disco conferido: Saint Seiya: The Hades (Europa, SLES-54162)")
+    print("disc verified: Saint Seiya: The Hades (Europe, SLES-54162)")
     return 0
 
 

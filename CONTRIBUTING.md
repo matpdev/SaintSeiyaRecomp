@@ -15,7 +15,7 @@ Run the port (see the README) and open an issue with:
 
 - what happened and where (screen, character, game mode);
 - your GPU, driver and distribution;
-- the terminal output (`./jogar.sh -v 2> log.txt` gives more detail);
+- the terminal output (`./play.sh -v 2> log.txt` gives more detail);
 - whether the problem goes away with `SSTHEH_GS=sw` (software renderer).
 
 ## Decompiling a function

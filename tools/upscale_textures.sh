@@ -1,7 +1,7 @@
 #!/bin/sh
 # HD texture pack from the game's own textures, upscaled with Real-ESRGAN (anime model).
 #
-#   1. SSTHEH_TEX_DUMP=1 ./jogar.sh        play through the scenes you want: each texture seen is
+#   1. SSTHEH_TEX_DUMP=1 ./play.sh        play through the scenes you want: each texture seen is
 #                                          saved in ~/.local/share/sstheh/textures/dump/
 #   2. tools/upscale_textures.sh [scale]   upscales the dumped ones not done yet (default 4x) into
 #                                          ~/.local/share/sstheh/textures/, which the game then uses

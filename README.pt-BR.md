@@ -8,6 +8,11 @@ recompilação estática, com uma decompilação matching avançando em paralelo
 
 Este repositório não contém nada do jogo. Você precisa da sua própria cópia do disco.
 
+![Seiya numa luta, em 16:9 com o HUD nas proporções originais](docs/img/widescreen.webp)
+
+Como foi feito: [widescreen sem símbolos](https://sidequest-lab.dev/pt/blog/saint-seiya-widescreen/) e
+[uma semana de performance e depuração](https://sidequest-lab.dev/pt/blog/saint-seiya-semana-de-ajustes/).
+
 ## Estado
 
 O jogo **roda nativamente**: tela de título, menus, modo história e lutas, com música, vozes, efeitos sonoros,
@@ -20,12 +25,14 @@ controle e memory card.
 | CPU / kernel | registradores de 128 bits, FPU do PS2, VU0 em modo macro; threads, semáforos, interrupções, timers |
 | IOP | SIF/RPC, leitura do disco a partir do ISO, controle (PADMAN), CRI ADXI (som); o driver de som do jogo (SSD/RSSD) roda como está, num interpretador MIPS do IOP com SPU2 emulado; memory card (libmc2) sobre uma pasta |
 | Gráficos | DMAC → VIF → GIF → GS em thread própria; renderer Vulkan (SDL3 GPU) e GS em software; programas de VU1 traduzidos para código nativo |
-| Imagem | resolução interna pela resolução da tela, supersampling, filtro anisotrópico |
+| Imagem | widescreen 16:9 (3D mais largo, HUD e menus nas proporções 4:3; F2 volta ao 4:3 original), resolução interna que acompanha a janela, supersampling, filtro anisotrópico, pacotes de texturas |
 | Taxa de quadros | 60 Hz (modo NTSC do próprio jogo, com a região europeia); quadros interpolados entre os do jogo, sem limite (ou vsync, F4) |
-| Som | música e vozes (CRI ADX) e **efeitos sonoros** (golpes, passos, menus: o driver SSD/RSSD do disco, interpretado, tocando num SPU2 emulado) |
+| Som | música e vozes (CRI ADX) e **efeitos sonoros** (golpes, passos, menus: o driver SSD/RSSD do disco, interpretado, tocando num SPU2 emulado), com o reverb do SPU2 |
+| Vídeo | o vídeo de abertura (Sofdec), decodificado com FFmpeg |
+| Extras | um modo de treino que o original não tem (F5: oponente parado, vida infinita, dano e inputs na tela); um segundo controle joga como jogador 2 |
 | Decompilação | compilador identificado (Metrowerks CodeWarrior PS2 3.0.1, `-O3`, C++), 327 funções de biblioteca nomeadas; nenhuma função do jogo decompilada ainda |
 | Memory card | o slot 1 é uma pasta (`~/.local/share/sstheh/memcard1`): o jogo salva e carrega normalmente |
-| Falta | reverb do SPU2 (o jogo o deixa desligado na maior parte), vídeos (Sofdec/MPEG-2 via IPU), testes do começo ao fim, Windows/macOS |
+| Falta | testes do começo ao fim, Windows/macOS |
 
 Detalhes técnicos (em inglês) em [`docs/roadmap.md`](docs/roadmap.md) e [`docs/recon.md`](docs/recon.md).
 
@@ -41,7 +48,7 @@ jogo está neste repositório. A tradução brasileira de fãs é outro build (c
   - Arch: `sudo pacman -S gcc python ninja shaderc sdl3 vulkan-icd-loader ffmpeg` (mais o driver da sua placa)
   - Debian/Ubuntu: `sudo apt install gcc python3-venv ninja-build glslc libsdl3-dev libvulkan1 libavformat-dev libavcodec-dev libswscale-dev libswresample-dev`
 - o GCC também é usado para os programas de VU1 do jogo: eles são compilados para código nativo a partir do
-  executável, antes de jogar (`build/sstheh --compile-vu`, que o `compilar.sh` roda, uns 20 s), e guardados em
+  executável, antes de jogar (`build/sstheh --compile-vu`, que o `build.sh` roda, uns 20 s), e guardados em
   `~/.cache/sstheh/vu`; os que faltarem são compilados em segundo plano quando o jogo abre
 
 ### 2. Compilar e jogar
@@ -49,15 +56,15 @@ jogo está neste repositório. A tradução brasileira de fãs é outro build (c
 Faça uma imagem ISO do seu disco (por exemplo com `dd if=/dev/sr0 of=game.iso` ou o programa que preferir) e:
 
 ```sh
-git clone <este repositório> SaintSeiyaDecomp && cd SaintSeiyaDecomp
-./compilar.sh /caminho/para/game.iso   # sem argumento, abre uma janela para escolher a ISO
-./jogar.sh                             # abre o jogo (e recompila sozinho se o código mudar)
-./jogar.sh --atalho                    # opcional: ícone no menu de aplicativos
+git clone https://github.com/matpdev/SaintSeiyaRecomp.git && cd SaintSeiyaRecomp
+./build.sh /caminho/para/game.iso      # compila; sem argumento, abre uma janela para escolher a ISO
+./play.sh                              # abre o jogo (e recompila sozinho se o código mudar)
+./play.sh --shortcut                   # opcional: ícone no menu de aplicativos
 ```
 
-O `compilar.sh` confere as dependências (e diz o comando para instalar o que faltar), valida a ISO pelo SHA-1 do
+O `build.sh` confere as dependências (e diz o comando para instalar o que faltar), valida a ISO pelo SHA-1 do
 executável, prepara `disc/`, cria o ambiente Python em `.venv` e gera `build/sstheh`. A primeira compilação leva
-alguns minutos. `./compilar.sh --limpar` refaz tudo do zero.
+alguns minutos. `./build.sh --clean` refaz tudo do zero. (`compilar.sh` e `jogar.sh`, os nomes antigos, continuam funcionando.)
 
 <details><summary>Passo a passo manual (o que os scripts fazem)</summary>
 
@@ -141,7 +148,6 @@ indicados, sem janela). Variáveis de ambiente:
 
 ### Problemas conhecidos
 
-- vídeos não tocam
 - se algo quebrar, rode com `-v` e anexe o log ao relato, junto com o que estava fazendo na hora
 
 ## Decompilação (build matching)
@@ -180,5 +186,6 @@ testando e relatando o que quebra.
 
 ## Licenças
 
-Partes do renderer vêm do Tenkaichi3Decomp (MIT, em `licenses/`). Os compiladores Metrowerks são software
+O código deste repositório está sob a licença MIT ([`LICENSE`](LICENSE)). Ela não cobre o jogo, que não está incluído e
+pertence aos seus donos. Partes do renderer vêm do Tenkaichi3Decomp (MIT, em `licenses/`). Os compiladores Metrowerks são software
 proprietário, arquivado pelo decomp.me; use-os só se tiver direito a eles.

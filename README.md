@@ -8,6 +8,11 @@ recompilation, with a matching decompilation moving forward alongside it. Modell
 
 This repository contains nothing from the game. You need your own copy of the disc.
 
+![Seiya in a fight, in 16:9 with the HUD in its original proportions](docs/img/widescreen.webp)
+
+How it was made: [widescreen without symbols](https://sidequest-lab.dev/blog/saint-seiya-widescreen/) and
+[a week of performance work and debugging](https://sidequest-lab.dev/blog/saint-seiya-semana-de-ajustes/).
+
 ## Status
 
 The game **runs natively**: title screen, menus, story mode and fights, with music, voices, sound effects,
@@ -20,12 +25,14 @@ controller and memory card.
 | CPU / kernel | 128-bit registers, the PS2's FPU, VU0 macro mode; threads, semaphores, interrupts, timers |
 | IOP | SIF/RPC, disc reads from the ISO, controller (PADMAN), CRI ADXI (sound); the game's sound driver (SSD/RSSD) runs as it is, on an IOP MIPS interpreter with an emulated SPU2; memory card (libmc2) on a folder |
 | Graphics | DMAC → VIF → GIF → GS on its own thread; Vulkan renderer (SDL3 GPU) and a software GS; VU1 programs translated to native code |
-| Image | internal resolution from the screen's, supersampling, anisotropic filtering |
+| Image | 16:9 widescreen (wider 3D view, HUD and menus kept in their 4:3 shapes; F2 for the original 4:3), internal resolution that follows the window, supersampling, anisotropic filtering, texture packs |
 | Frame rate | 60 Hz (the game's own NTSC mode, keeping the European region); frames interpolated between the game's, unlimited (or vsync, F4) |
-| Sound | music and voices (CRI ADX) and **sound effects** (hits, footsteps, menus: the disc's SSD/RSSD driver, interpreted, playing on an emulated SPU2) |
+| Sound | music and voices (CRI ADX) and **sound effects** (hits, footsteps, menus: the disc's SSD/RSSD driver, interpreted, playing on an emulated SPU2), with the SPU2's reverb |
+| Video | the opening video (Sofdec), decoded with FFmpeg |
+| Extras | a training mode the original doesn't have (F5: idle opponent, infinite life, damage and inputs on screen); a second gamepad plays as player 2 |
 | Decompilation | compiler identified (Metrowerks CodeWarrior PS2 3.0.1, `-O3`, C++), 327 library functions named; no game function decompiled yet |
 | Memory card | slot 1 is a folder (`~/.local/share/sstheh/memcard1`): the game saves and loads normally |
-| Missing | SPU2 reverb (the game mostly leaves it off), videos (Sofdec/MPEG-2 through the IPU), full playthrough testing, Windows/macOS |
+| Missing | full playthrough testing, Windows/macOS |
 
 Details in [`docs/roadmap.md`](docs/roadmap.md) and [`docs/recon.md`](docs/recon.md).
 
@@ -42,7 +49,7 @@ does not work.
   - Arch: `sudo pacman -S gcc python shaderc sdl3 vulkan-icd-loader ffmpeg` (plus your GPU's driver)
   - Debian/Ubuntu: `sudo apt install gcc python3-venv glslc libsdl3-dev libvulkan1 libavformat-dev libavcodec-dev libswscale-dev libswresample-dev`
 - GCC is also used for the game's VU1 programs: they are compiled to native code from the executable,
-  ahead of time (`build/sstheh --compile-vu`, which `compilar.sh` runs, about 20 s), and kept in
+  ahead of time (`build/sstheh --compile-vu`, which `build.sh` runs, about 20 s), and kept in
   `~/.cache/sstheh/vu`; any missing ones are compiled in the background when the game starts
 
 ### 2. Build and play
@@ -51,15 +58,15 @@ Make an ISO image of your disc (for instance with `dd if=/dev/sr0 of=game.iso`, 
 
 ```sh
 git clone https://github.com/matpdev/SaintSeiyaRecomp.git && cd SaintSeiyaRecomp
-./compilar.sh /path/to/game.iso   # build; with no argument, a window opens to pick the ISO
-./jogar.sh                        # play (rebuilds by itself when the code changed)
-./jogar.sh --atalho               # optional: an icon in the applications menu
+./build.sh /path/to/game.iso      # build; with no argument, a window opens to pick the ISO
+./play.sh                         # play (rebuilds by itself when the code changed)
+./play.sh --shortcut              # optional: an icon in the applications menu
 ```
 
-`compilar.sh` ("build") checks the dependencies (and prints the command to install what is missing), verifies
+`build.sh` checks the dependencies (and prints the command to install what is missing), verifies
 the ISO by the executable's SHA-1, prepares `disc/`, creates the Python environment in `.venv` and builds
-`build/sstheh`. The first build takes a few minutes. `./compilar.sh --limpar` rebuilds from scratch.
-`jogar.sh` ("play") runs the game.
+`build/sstheh`. The first build takes a few minutes. `./build.sh --clean` rebuilds from scratch.
+`play.sh` runs the game. (`compilar.sh` and `jogar.sh`, the old names, still work.)
 
 <details><summary>Manual steps (what the scripts do)</summary>
 
@@ -143,7 +150,6 @@ vertical blanks, no window). Environment variables:
 
 ### Known issues
 
-- videos don't play
 - if something breaks, run with `-v` and attach the log to the report, with what you were doing at the time
 
 ## Decompilation (matching build)
@@ -172,7 +178,7 @@ ee-gcc 2.96 is an i386 binary: 32-bit program support is needed.
 | `port/iop/`, `port/hle/` | IOP services and SDK functions replaced by native ones (listed in `port/hle.txt`) |
 | `port/iop/lle/` | IOP modules running as they are: MIPS I interpreter, IRX loader, native system modules, SPU2 |
 | `port/gs/` | DMA, VIF, VU, GS and the Vulkan renderer |
-| `compilar.sh`, `jogar.sh`, `tools/disc.py` | build from your ISO, play; disc check |
+| `build.sh`, `play.sh`, `tools/disc.py` | build from your ISO, play; disc check |
 | `tools/fdiff.py` | compiles a `.cpp` and compares each function with the original |
 | `tools/recon/` | reconnaissance scripts (compiler classification, cross references) |
 
@@ -183,5 +189,6 @@ playing and reporting what breaks.
 
 ## Licenses
 
-Parts of the renderer come from Tenkaichi3Decomp (MIT, in `licenses/`). The Metrowerks compilers are
+The code in this repository is under the MIT license ([`LICENSE`](LICENSE)). It does not cover the game, which is
+not included and belongs to its owners. Parts of the renderer come from Tenkaichi3Decomp (MIT, in `licenses/`). The Metrowerks compilers are
 proprietary software archived by decomp.me; use them only if you are entitled to.
