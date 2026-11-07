@@ -49,9 +49,10 @@ jogo está neste repositório. A tradução brasileira de fãs é outro build (c
   ele ficam com a fonte do disco)
   - Arch: `sudo pacman -S gcc python ninja shaderc sdl3 vulkan-icd-loader ffmpeg freetype2` (mais o driver da sua placa)
   - Debian/Ubuntu: `sudo apt install gcc python3-venv ninja-build glslc libsdl3-dev libvulkan1 libavformat-dev libavcodec-dev libswscale-dev libswresample-dev libfreetype-dev`
-- o GCC também é usado para os programas de VU1 do jogo: eles são compilados para código nativo a partir do
-  executável, antes de jogar (`build/sstheh --compile-vu`, que o `build.sh` roda, uns 20 s), e guardados em
-  `~/.cache/sstheh/vu`; os que faltarem são compilados em segundo plano quando o jogo abre
+- os programas de VU1 do jogo são traduzidos para C a partir do executável e ficam dentro do `build/sstheh`
+  (um primeiro executável, `build/sstheh-stage1`, escreve-os em `build/vu/`): para jogar não é preciso
+  compilador. O build serve para qualquer PC x86-64 dos últimos ~12 anos (`x86-64-v2`);
+  `python3 configure.py --march=native` compila só para esta máquina (VU1 uns 4% mais rápida)
 
 ### 2. Compilar e jogar
 

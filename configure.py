@@ -27,6 +27,9 @@ AS_FLAGS = "-EL -march=r5900 -mabi=eabi -G0 -no-pad-sections -Iinclude"
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-split", action="store_true", help="reuse the existing asm/ and linker script")
+    ap.add_argument("--march", default="x86-64-v2",
+                    help="CPU the port is built for (default x86-64-v2: SSE4.2, any x86-64 PC of the last ~12 years; "
+                         "native: this one only)")
     args = ap.parse_args()
     os.chdir(ROOT)
 
@@ -72,9 +75,9 @@ def main():
                description="recomp", restat=True)
         inc = "-Iport/runtime -Iport/kernel -Iport/iop -Iport/gs -Ibuild/recomp -Ibuild/shaders"
         # the translated code builds fast at -O1; the runtime and the renderer get -O2
-        n.rule("cc", f"gcc -c -O1 -g -w -fno-strict-aliasing -ffp-contract=off -march=native {inc} -MMD -MF $out.d $in -o $out",
+        n.rule("cc", f"gcc -c -O1 -g -w -fno-strict-aliasing -ffp-contract=off -march={args.march} {inc} -MMD -MF $out.d $in -o $out",
                depfile="$out.d", deps="gcc", description="cc $in")
-        n.rule("cc_fast", f"gcc -c -O2 -g -w -fno-strict-aliasing -ffp-contract=off -march=native {inc} -MMD -MF $out.d $in -o $out",
+        n.rule("cc_fast", f"gcc -c -O2 -g -w -fno-strict-aliasing -ffp-contract=off -march={args.march} {inc} -MMD -MF $out.d $in -o $out",
                depfile="$out.d", deps="gcc", description="cc $in")
         # FFmpeg plays the opening video (port/hle/movie.c); without it the video is skipped
         def pkg(*args):
@@ -87,7 +90,7 @@ def main():
         ff_cflags = "-DSSTHEH_FFMPEG " + pkg("--cflags") if ff_libs is not None else ""
         if ff_libs is None:
             print("FFmpeg (libavformat, libavcodec, libavutil, libswscale, libswresample) not found: the opening video is skipped")
-        n.rule("cc_ffmpeg", f"gcc -c -O2 -g -w -fno-strict-aliasing -ffp-contract=off -march=native {inc} {ff_cflags} -MMD -MF $out.d $in -o $out",
+        n.rule("cc_ffmpeg", f"gcc -c -O2 -g -w -fno-strict-aliasing -ffp-contract=off -march={args.march} {inc} {ff_cflags} -MMD -MF $out.d $in -o $out",
                depfile="$out.d", deps="gcc", description="cc $in")
         # FreeType draws the game's texts with a font file (port/hle/textfont.c); without it they stay as on the disc
         def ft(arg):
@@ -99,7 +102,7 @@ def main():
         ft_cflags = "-DSSTHEH_FREETYPE " + ft("--cflags") if ft_libs is not None else ""
         if ft_libs is None:
             print("FreeType (freetype2) not found: the game's texts keep the disc's font")
-        n.rule("cc_freetype", f"gcc -c -O2 -g -w -fno-strict-aliasing -ffp-contract=off -march=native {inc} {ft_cflags} -MMD -MF $out.d $in -o $out",
+        n.rule("cc_freetype", f"gcc -c -O2 -g -w -fno-strict-aliasing -ffp-contract=off -march={args.march} {inc} {ft_cflags} -MMD -MF $out.d $in -o $out",
                depfile="$out.d", deps="gcc", description="cc $in")
         n.rule("link", f"gcc -rdynamic $in -o $out -lm -lpthread -lSDL3 -ldl {ff_libs or ''} {ft_libs or ''}", description="link $out")
         rc_files = [f"build/recomp/rc_{k:03d}.c" for k in range(RC_FILES)] + ["build/recomp/functab.c"]
@@ -122,7 +125,18 @@ def main():
             n.build(out, "glslc", sh)
             spvs.append(out)
         n.build("build/shaders/shaders.h", "spvhdr", spvs, implicit=["tools/spv2h.py"])
-        n.build("build/sstheh", "link", port_objs)
+        # the game's VU1 programs built in (port/gs/vu_jit.c): a first executable writes them as C from
+        # the game's executable, the second has them linked in (no compiler needed to play)
+        n.build("build/sstheh-stage1", "link", port_objs)
+        n.rule("gen_vu", "build/sstheh-stage1 -q --gen-vu build/vu > /dev/null", description="VU1 programs as C")
+        vu_c = [f"build/vu/vu_{k:02d}.c" for k in range(16)] + ["build/vu/vu_builtin.c"]
+        n.build(vu_c, "gen_vu", implicit=["build/sstheh-stage1", "disc/SLES_541.62"])
+        vu_objs = []
+        for src in vu_c:
+            o = "build/port/" + src.replace("/", "_")[:-2] + ".o"
+            n.build(o, "cc_fast", src)
+            vu_objs.append(o)
+        n.build("build/sstheh", "link", port_objs + vu_objs)
         n.build("port", "phony", "build/sstheh")
     print(f"build.ninja written: {len(sources)} asm files, {len(bins)} binary files")
 

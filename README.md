@@ -50,9 +50,10 @@ does not work.
   they keep the disc's font)
   - Arch: `sudo pacman -S gcc python shaderc sdl3 vulkan-icd-loader ffmpeg freetype2` (plus your GPU's driver)
   - Debian/Ubuntu: `sudo apt install gcc python3-venv glslc libsdl3-dev libvulkan1 libavformat-dev libavcodec-dev libswscale-dev libswresample-dev libfreetype-dev`
-- GCC is also used for the game's VU1 programs: they are compiled to native code from the executable,
-  ahead of time (`build/sstheh --compile-vu`, which `build.sh` runs, about 20 s), and kept in
-  `~/.cache/sstheh/vu`; any missing ones are compiled in the background when the game starts
+- the game's VU1 programs are translated to C from its executable and built into `build/sstheh` (a first
+  executable, `build/sstheh-stage1`, writes them into `build/vu/`): playing needs no compiler. The build
+  targets any x86-64 PC of the last ~12 years (`x86-64-v2`); `python3 configure.py --march=native` builds
+  for this one only (about 4% faster VU1)
 
 ### 2. Build and play
 

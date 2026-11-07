@@ -15,8 +15,12 @@
  * pairs it was translated with (an indirect jump): v->pc is where to go on; 2 when it can't start
  * there (a Q or P result on its way: the interpreter goes on).
  *
- * SSTHEH_VUJIT=0 turns it off. The generated code needs the sources (port/gs, port/runtime),
- * found next to the executable (build/..).
+ * The build links the game's programs into the executable (vu_jit_generate, run by the build: the
+ * table vu_builtin[], keyed as here with the header hash the build had): those need no compiler
+ * and no sources. The others (none, normally) are compiled as above when the sources are found
+ * next to the executable (build/..); without them they are interpreted.
+ *
+ * SSTHEH_VUJIT=0 turns it off.
  */
 #define _GNU_SOURCE
 #include <dirent.h>
@@ -43,6 +47,26 @@
 #define CC_FLAGS "-O2 -march=native -fno-strict-aliasing -ffp-contract=off -w -shared -fPIC"   /* also */
 
 typedef int (*ProgFn)(Vu *v);
+
+/* The programs built into the executable (build/vu/vu_builtin.c, sorted by key), weak: the first
+ * stage of the build, which writes them, has none. */
+typedef struct { u64 key; ProgFn fn; } VuBuiltin;
+extern const VuBuiltin vu_builtin[] __attribute__((weak));
+extern const int vu_builtin_count __attribute__((weak));
+extern const u64 vu_builtin_header_hash __attribute__((weak));
+static int can_compile;         /* the sources (and so gcc) for programs not built in */
+
+static ProgFn builtin(u64 key) {
+    if (!&vu_builtin_count || !vu_builtin_count) return NULL;
+    int lo = 0, hi = vu_builtin_count - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        if (vu_builtin[mid].key == key) return vu_builtin[mid].fn;
+        if (vu_builtin[mid].key < key) lo = mid + 1;
+        else hi = mid - 1;
+    }
+    return NULL;
+}
 
 typedef struct Prog {
     u64 key;
@@ -974,7 +998,13 @@ static int setup(void) {
     snprintf(src_dir, sizeof src_dir, "%s", exe);
     char probe[PATH_MAX + 64];
     snprintf(probe, sizeof probe, "%s/port/gs/vu_internal.h", src_dir);
-    if (access(probe, R_OK) != 0) { rt_log("vujit", "sources not found (%s): VU1 programs are interpreted", probe); return 0; }
+    int built_in = &vu_builtin_count && vu_builtin_count > 0;
+    if (access(probe, R_OK) != 0) {
+        if (!built_in) { rt_log("vujit", "sources not found (%s): VU1 programs are interpreted", probe); return 0; }
+        header_hash = vu_builtin_header_hash;
+        rt_log("vujit", "%d VU1 programs built in (no sources: any other one is interpreted)", vu_builtin_count);
+        return 1;
+    }
     static const char *const headers[] = {"port/gs/vu_internal.h", "port/runtime/r5900.h", "port/runtime/runtime.h"};
     header_hash = 0xCBF29CE484222325ull;
     for (int k = 0; k < 3; k++) {
@@ -987,6 +1017,10 @@ static int setup(void) {
         fclose(f);
     }
     for (const char *c = CC_FLAGS; *c; c++) header_hash = (header_hash ^ (u8)*c) * 0x100000001B3ull;
+    if (built_in && header_hash != vu_builtin_header_hash)
+        rt_log("vujit", "the sources changed since the build: its %d programs are not used", vu_builtin_count);
+    else if (built_in) rt_log("vujit", "%d VU1 programs built in", vu_builtin_count);
+    can_compile = 1;
     const char *home = getenv("XDG_CACHE_HOME");
     char base[PATH_MAX];
     if (home && *home) snprintf(base, sizeof base, "%s", home);
@@ -1049,7 +1083,11 @@ static ProgFn find(Vu *v) {
         p->entry = entry * 8;
         p->next = *b;
         *b = p;
+        ProgFn bf = builtin(key);
         char so_path[PATH_MAX + 32];
+        if (bf) { p->fn = bf; p->state = 1; perf.jit_cached++; }
+        else if (!can_compile) p->state = 2;
+        else {
         snprintf(so_path, sizeof so_path, "%s/%016llx.so", cache_dir, (unsigned long long)key);
         if (access(so_path, R_OK) == 0) { load(p, so_path); perf.jit_cached++; }
         else {
@@ -1061,6 +1099,7 @@ static ProgFn find(Vu *v) {
             queue_tail = p;
             pthread_cond_signal(&qcond);
             pthread_mutex_unlock(&qlock);
+        }
         }
     }
     static u32 nseen;
@@ -1141,6 +1180,31 @@ static u32 packet_mpgs(const u8 *pk, u32 room, u8 *code, u32 base, u32 *size) {
     return end;
 }
 
+/* vu_jit_generate: the programs written as C into GEN_FILES files instead of being compiled */
+#define GEN_FILES 16
+static FILE *gen_file[GEN_FILES];
+static u64 gen_key[8192];
+static u32 gen_n;
+
+static void gen_write(const char *src, u64 key) {
+    FILE *f = gen_file[gen_n % GEN_FILES];
+    char name[64];
+    snprintf(name, sizeof name, "int vu_prog_%016llx(Vu *v) {", (unsigned long long)key);
+    const char *at = strstr(src, "int vu_prog(Vu *v) {");
+    if (!at) return;
+    fprintf(f, "/* ---- program %016llx */\n", (unsigned long long)key);
+    fwrite(src, 1, (size_t)(at - src), f);
+    fputs(name, f);
+    fputs(at + strlen("int vu_prog(Vu *v) {"), f);
+    for (const char *l = src; l && *l; l = strchr(l, '\n') ? strchr(l, '\n') + 1 : NULL)   /* its macros, for the next one */
+        if (!strncmp(l, "#define ", 8)) {
+            const char *n = l + 8, *e = n;
+            while (*e == '_' || (*e >= 'A' && *e <= 'Z') || (*e >= 'a' && *e <= 'z') || (*e >= '0' && *e <= '9')) e++;
+            fprintf(f, "#undef %.*s\n", (int)(e - n), n);
+        }
+    gen_key[gen_n++] = key;
+}
+
 static u32 ahead_image(const u8 *code, u32 from, u32 to, u64 *seen, u32 nseen_max, u32 *nseen) {
     u32 starts[NPAIRS], ns = 0, queued = 0;
     static u8 hit[NPAIRS];
@@ -1163,6 +1227,13 @@ static u32 ahead_image(const u8 *code, u32 from, u32 to, u64 *seen, u32 nseen_ma
         while (j < *nseen && seen[j] != key) j++;
         if (j < *nseen || *nseen == nseen_max) continue;
         seen[(*nseen)++] = key;
+        if (gen_file[0]) {
+            char *src = generate(code, starts[k], in);
+            gen_write(src, key);
+            free(src);
+            continue;
+        }
+        if (builtin(key) || !can_compile) continue;
         char so_path[PATH_MAX + 32];
         snprintf(so_path, sizeof so_path, "%s/%016llx.so", cache_dir, (unsigned long long)key);
         if (access(so_path, R_OK) == 0) continue;
@@ -1219,4 +1290,37 @@ int vu_jit_ahead(int wait, int *queued) {
     if (wait)
         while (__atomic_load_n(&ahead_left, __ATOMIC_ACQUIRE) > 0) usleep(20000);
     return (int)nseen;
+}
+
+static int cmp_key(const void *a, const void *b) {
+    u64 x = *(const u64 *)a, y = *(const u64 *)b;
+    return x < y ? -1 : x > y;
+}
+
+/* --gen-vu dir (the build): the game's programs as C, in dir/vu_00.c .. vu_15.c, and their table in
+ * dir/vu_builtin.c. 0: done. */
+int vu_jit_generate(const char *dir) {
+    if (enabled < 0) enabled = setup();
+    if (!enabled || !can_compile) { fprintf(stderr, "--gen-vu: the sources are needed\n"); return 1; }
+    char path[PATH_MAX + 32];
+    for (int k = 0; k < GEN_FILES; k++) {
+        snprintf(path, sizeof path, "%s/vu_%02d.c", dir, k);
+        if (!(gen_file[k] = fopen(path, "w"))) { perror(path); return 1; }
+        fputs("/* generated by build/sstheh-stage1 --gen-vu (port/gs/vu_jit.c): the game's VU1 programs */\n", gen_file[k]);
+    }
+    int queued;
+    vu_jit_ahead(0, &queued);
+    for (int k = 0; k < GEN_FILES; k++) fclose(gen_file[k]);
+    qsort(gen_key, gen_n, sizeof *gen_key, cmp_key);
+    snprintf(path, sizeof path, "%s/vu_builtin.c", dir);
+    FILE *f = fopen(path, "w");
+    if (!f) { perror(path); return 1; }
+    fputs("/* generated by build/sstheh-stage1 --gen-vu (port/gs/vu_jit.c) */\n#include \"vu_internal.h\"\n\n", f);
+    for (u32 i = 0; i < gen_n; i++) fprintf(f, "int vu_prog_%016llx(Vu *v);\n", (unsigned long long)gen_key[i]);
+    fputs("\ntypedef struct { u64 key; int (*fn)(Vu *); } VuBuiltin;\nconst VuBuiltin vu_builtin[] = {\n", f);
+    for (u32 i = 0; i < gen_n; i++) fprintf(f, "    {0x%016llxull, vu_prog_%016llx},\n", (unsigned long long)gen_key[i], (unsigned long long)gen_key[i]);
+    fprintf(f, "};\nconst int vu_builtin_count = %u;\nconst u64 vu_builtin_header_hash = 0x%016llxull;\n", gen_n, (unsigned long long)header_hash);
+    fclose(f);
+    printf("%u VU1 programs written into %s\n", gen_n, dir);
+    return 0;
 }

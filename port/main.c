@@ -40,6 +40,7 @@ int main(int argc, char **argv) {
     const char *elf = "disc/SLES_541.62", *iso = "disc/game.iso";
     int shots[64], nshots = 0, compile_vu = 0, warm = 30;
     const char *replay = NULL;
+    const char *gen_vu = NULL;          /* the build: the game's VU1 programs written as C (port/gs/vu_jit.c) */
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-q")) rt_verbose = 0;
         else if (!strcmp(argv[i], "-v")) rt_verbose = 2;
@@ -55,11 +56,18 @@ int main(int argc, char **argv) {
         }
         else if (!strcmp(argv[i], "--iso") && i + 1 < argc) iso = argv[++i];
         else if (!strcmp(argv[i], "--compile-vu")) compile_vu = 1;
+        else if (!strcmp(argv[i], "--gen-vu") && i + 1 < argc) gen_vu = argv[++i];
         else if (!strcmp(argv[i], "--gs-replay") && i + 1 < argc) {
             replay = argv[++i];
             if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9') warm = atoi(argv[++i]);
         }
         else elf = argv[i];
+    }
+    if (gen_vu) {                       /* only the executable is needed */
+        int vu_jit_generate(const char *dir);
+        memory_init();
+        if (memory_load_elf(elf, &entry)) { fprintf(stderr, "cannot load %s\n", elf); return 1; }
+        return vu_jit_generate(gen_vu);
     }
     if (cdvd_open(iso)) {
         fprintf(stderr, "cannot open the disc image %s (use --iso <file>)\n", iso);
