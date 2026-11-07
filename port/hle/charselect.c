@@ -74,6 +74,23 @@ static u32 method(Ctx *c, u32 table, u32 off, u32 a0, u32 a1) { return call(c, r
 static void wrf(Ctx *c, u32 a, float f) { u32 u; memcpy(&u, &f, 4); wr32(c, a, u); }
 static float fl(u32 u) { float f; memcpy(&f, &u, 4); return f; }
 
+/* The strips slide in from one side and out to the other (the place x0: about 12.9 coming in, 0 in
+ * place, -13.2 parked out, a strip's length): on a 4:3 screen a parked strip is wholly off it, but its
+ * new pieces at the end it leaves behind would be where it was. So the pieces added at one end are
+ * shown only while the strip is in place or coming from that end. */
+static int end_out(int i, float x0) { return i < 0 ? x0 > 0.5f : i >= 12 ? x0 < -0.5f : 0; }
+/* A parked strip stops just past the 4:3 screen: in 16:9 its end would show at a side; it is hidden. */
+static int parked(float x0) { return x0 >= 13.0f || x0 <= -13.0f; }
+
+/* every element hidden by the game (0x0017A030), per side */
+static struct { u32 side; u32 hide; } hidden[8];
+static u32 *hidden_of(u32 side) {
+    for (int k = 0; k < 8; k++) if (hidden[k].side == side) return &hidden[k].hide;
+    for (int k = 0; k < 8; k++) if (!hidden[k].side) { hidden[k].side = side; return &hidden[k].hide; }
+    hidden[0].side = side;
+    return &hidden[0].hide;
+}
+
 /* malloc (0x00100530) of the elements' block */
 void hle_csel_alloc(Ctx *c) {
     if (RW(31) == 0x0017B1D0 && RW(4) == 0x10 + BASE * ELEM && enabled()) SET32(4, 0x10 + (BASE + NEW) * ELEM);
@@ -115,10 +132,17 @@ void hle_csel_borders_place(Ctx *c) {
     if (!e) return;
     Saved s;
     save(c, &s);
-    float x0 = F(12) - fl(0x40D33334);              /* - 6.6 */
+    float place = F(12), x0 = place - fl(0x40D33334);  /* - 6.6 */
+    u32 hide_all = *hidden_of(RW(4));
+    for (int k = 0; k < 24; k++) {                  /* the game's pieces: hidden while parked */
+        u32 o = rd32(c, e + (u32)(TOP0 + k) * ELEM);
+        method(c, rd32(c, o + 0x10), 0x1C, o, hide_all || parked(place));
+    }
     for (int bottom = 0; bottom < 2; bottom++)
         for (int n = 0; n < 2 * EXTRA; n++) {
             int i = slot(n);
+            u32 o = rd32(c, piece(e, bottom, i));
+            method(c, rd32(c, o + 0x10), 0x1C, o, hide_all || parked(place) || end_out(i, place));
             u32 node = rd32(c, piece(e, bottom, i) + 4);
             wrf(c, node + 0xC0, x0 + fl(0x3F8CCCCD) * (float)i);
             wrf(c, node + 0xC4, fl(bottom ? 0x3EBBBBC2 : 0xBF0CCCD6));      /* 0.3667, -0.55 */
@@ -155,7 +179,7 @@ void hle_csel_portraits(Ctx *c) {
         wr32(c, node + 0x8C, rd32(c, node + 0x8C) | 1);
         call(c, 0x002A1E20, node, 0);
         u32 o = rd32(c, p);
-        method(c, rd32(c, o + 0x10), 0x1C, o, 0);
+        if (!end_out(n - more, x0) && !(more && parked(x0))) method(c, rd32(c, o + 0x10), 0x1C, o, 0);
         at = call(c, 0x0031F0B0, rd32(c, side + 0x48), at);
         x = fl(0x3F8CCCCD) + x;
     }
@@ -206,6 +230,7 @@ void hle_csel_show(Ctx *c) {
     Saved s;
     save(c, &s);
     u32 hide = (RW(5) & 0xFF) || rd8(c, rd32(c, side + 0x28));
+    *hidden_of(side) = hide;
     for (int bottom = 0; bottom < 2; bottom++)
         for (int n = 0; n < 2 * EXTRA; n++) {
             u32 o = rd32(c, piece(e, bottom, slot(n)));
