@@ -375,6 +375,33 @@ static int frame_wide_3d(const GpuFrame *f) {
 
 static int kept_43(const GpuDraw *d, int wide_3d) { return d->flat2d && !(wide_3d && d->fullw); }
 
+/* The top of a fight's HUD (portraits, names, life bars, the timer between them) is made of pieces
+   that fit into one another, so it is moved point by point: up to 0.45 of the half width from the
+   edge (the portrait, the name) anchored to the screen's edge, the last 0.11 before the middle (the
+   timer's frame) kept in the middle, and what lies between (the bar, its ornament) stretched to join
+   them. x and c (the middle) in frame pixels. */
+static float hud_top_x(float x, float c) {
+    int right = x > c;
+    float u = right ? 2.0f * c - x : x;           /* distance from the nearer edge */
+    float a = 0.45f * c, b = 0.89f * c, v;
+    if (u <= a) v = 0.75f * u;
+    else if (u >= b) v = 0.75f * u + 0.25f * c;
+    else v = 0.75f * a + (u - a) * ((0.75f * b + 0.25f * c - 0.75f * a) / (b - a));
+    return right ? 2.0f * c - v : v;
+}
+
+/* A fight's HUD in widescreen: kept 4:3 in shape, but taken to the screen's sides. The top band
+   (22% of the height) goes through hud_top_x; in the bottom one (from 86%) each triangle wholly in
+   the left half of the frame goes to the screen's left edge and each wholly in the right half to its
+   right edge (cosmo gauges), what crosses or touches the middle staying there; the rest (the pause
+   menu, messages, combo counts) stays in the middle 4:3. SSTHEH_WIDE_HUD=0: the whole HUD in the
+   middle 4:3, as before. */
+static int anchored(const GpuDraw *d, int wide_3d) {
+    static int on = -1;
+    if (on < 0) on = !(getenv("SSTHEH_WIDE_HUD") && !atoi(getenv("SSTHEH_WIDE_HUD")));
+    return on && d->fight && kept_43(d, wide_3d) && d->count % 3 == 0;
+}
+
 static void upload_verts(SDL_GPUCommandBuffer *cmd, GpuFrame *f, const GpuVertex *verts) {
     SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
     u32 vbytes = f->nverts * sizeof(GpuVertex);
@@ -400,6 +427,22 @@ static void upload_verts(SDL_GPUCommandBuffer *cmd, GpuFrame *f, const GpuVertex
                 const GpuDraw *d = &f->draws[i];
                 if (!kept_43(d, wide_3d)) continue;
                 float c = (float)(d->fbw * 32);
+                if (anchored(d, wide_3d)) {
+                    float fh = (float)(d->scissor[3] - d->scissor[2] + 1);
+                    float top = (float)d->scissor[2] + fh * 0.22f, bottom = (float)d->scissor[2] + fh * 0.86f;
+                    for (u32 k = d->first; k < d->first + d->count; k += 3) {
+                        float lo = fminf(m[k].x, fminf(m[k + 1].x, m[k + 2].x)), hi = fmaxf(m[k].x, fmaxf(m[k + 1].x, m[k + 2].x));
+                        if (fmaxf(m[k].y, fmaxf(m[k + 1].y, m[k + 2].y)) < top) {
+                            for (u32 j = k; j < k + 3; j++) m[j].x = hud_top_x(m[j].x, c);
+                            continue;
+                        }
+                        float off = 0.0f;
+                        if (fminf(m[k].y, fminf(m[k + 1].y, m[k + 2].y)) >= bottom)    /* touching the middle: a centred piece's half */
+                            off = hi < c - 16.0f ? -0.25f * c : lo > c + 16.0f ? 0.25f * c : 0.0f;
+                        for (u32 j = k; j < k + 3; j++) m[j].x = c + (m[j].x - c) * 0.75f + off;
+                    }
+                    continue;
+                }
                 for (u32 k = d->first; k < d->first + d->count; k++) m[k].x = c + (m[k].x - c) * 0.75f;
             }
         }
@@ -614,7 +657,7 @@ void gpu_render(GpuFrame *f, const GpuVertex *verts) {
         if (pipe != last_pipe) { SDL_BindGPUGraphicsPipeline(rp, pipe); last_pipe = pipe; }
         SDL_Rect sc = {(int)d->scissor[0] * scale, (int)d->scissor[2] * scale,
                        (int)(d->scissor[1] - d->scissor[0] + 1) * scale, (int)(d->scissor[3] - d->scissor[2] + 1) * scale};
-        if (kept_43(d, wide_3d) && widescreen_on()) {     /* 2D kept 3/4 as wide: what was off the 4:3 screen stays off */
+        if (kept_43(d, wide_3d) && widescreen_on() && !anchored(d, wide_3d)) {     /* 2D kept 3/4 as wide: what was off the 4:3 screen stays off */
             float c = (float)(d->fbw * 32);
             int x0 = (int)((c + ((float)d->scissor[0] - c) * 0.75f) * scale);
             int x1 = (int)((c + ((float)d->scissor[1] + 1 - c) * 0.75f) * scale);

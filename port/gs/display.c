@@ -265,7 +265,7 @@ int display_shots(const int *at, int n) {
                    (unsigned long long)gs_priv_read(0x80), (unsigned long long)gs_priv_read(0x90),
                    (unsigned long long)gs_priv_read(0xA0));
         }
-        if (getenv("SSTHEH_RAM_DUMP")) {        /* the EE's 32 MB at the same moment, for finding the game's variables */
+        if (getenv("SSTHEH_RAM_DUMP") && atoi(getenv("SSTHEH_RAM_DUMP"))) {        /* the EE's 32 MB at the same moment, for finding the game's variables */
             snprintf(path, sizeof path, "build/ram_%04d.bin", at[k]);
             FILE *f = fopen(path, "wb");
             if (f) { fwrite(rt_ram, 1, 32u << 20, f); fclose(f); }

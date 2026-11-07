@@ -124,7 +124,8 @@ indicados, sem janela). Variáveis de ambiente:
 |---|---|
 | `SSTHEH_VSYNC=1` | começa com vsync (padrão: sem limite de fps) |
 | `SSTHEH_WINDOW=LxA` | tamanho da janela ao abrir, ex. `2560x1440`, ou `full` (padrão: 1920x1080, ou o último escolhido com F1) |
-| `SSTHEH_WIDESCREEN=0` | imagem 4:3 original (padrão: 16:9, o 3D com visão mais larga e menus e HUD nas proporções 4:3; artes 4:3 de tela cheia ganham laterais desfocadas) |
+| `SSTHEH_WIDESCREEN=0` | imagem 4:3 original (padrão: 16:9, o 3D com visão mais larga e menus e HUD nas proporções 4:3; artes 4:3 de tela cheia ganham laterais desfocadas; nas lutas, as barras de vida vão até as bordas) |
+| `SSTHEH_WIDE_HUD=0` | no widescreen, o HUD da luta (barras de vida, retratos, medidores de cosmo) no 4:3 do meio em vez de nas bordas |
 | `SSTHEH_SHOT_PRESENT=LxA` | o `--shot` salva a imagem como uma janela desse tamanho mostra (widescreen, laterais) em vez do quadro do PS2 |
 | `SSTHEH_TEX_DUMP=1` | salva cada textura que o jogo usa como PNG em `~/.local/share/sstheh/textures/dump/` (ou `dump/` na pasta de `SSTHEH_TEXTURES`) |
 | `SSTHEH_RAM_DUMP=1` | o `--shot` também salva os 32 MB do EE em `build/ram_N.bin` (para achar variáveis do jogo) |

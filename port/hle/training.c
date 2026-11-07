@@ -47,6 +47,7 @@ u32 kernel_vblank_count(void);
 
 /* ---- game side (game thread) */
 static u32 battle, battle_seen;             /* the battle object, the vertical blank it last ran */
+static volatile u32 battle_alive;           /* the battle object until it is freed */
 static u32 frame_no;
 typedef struct {
     u32 block;                              /* life block */
@@ -126,6 +127,7 @@ static void settle(Ctx *c, Side *s) {
 void hle_training_battle(Ctx *c) {
     init();
     battle = RW(4);
+    battle_alive = battle & 0x01FFFFFF;
     battle_seen = kernel_vblank_count();
     frame_no++;
     for (int k = 0; k < 2; k++) {
@@ -182,6 +184,19 @@ void hle_training_controller(Ctx *c) {
 
 /* ---- window side */
 static int in_fight(void) { return battle && kernel_vblank_count() - battle_seen < 10; }
+
+/* A fight is on from its first step until its battle object is freed (paused too, when its step
+ * doesn't run): its 2D is the HUD (gs.c). */
+int fight_on(void) { return battle_alive != 0; }
+
+/* the game's allocator frees p (port/hle/heap.c): the battle object, or the block holding it? */
+void training_freed(u32 p) {
+    u32 b = battle_alive;
+    if (!b || p > b || b - p > 0x10000) return;
+    for (u32 a = (p + 16) & ~15u; a <= b; a += 16)          /* a block ends where the next header starts */
+        if (rt_ram[a] == 'M' && rt_ram[a + 1] == 'E' && rt_ram[a + 2] == 'M') return;
+    battle_alive = 0;
+}
 
 /* F5 opens and closes the menu, Esc closes it; the rest goes through the pad (training_pad):
  * the keyboard's arrows, Z (cross) and X (circle) are the pad's. */

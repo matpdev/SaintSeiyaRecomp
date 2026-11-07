@@ -935,7 +935,8 @@ static void put_prim(int type, const Vertex *v, u32 zs, int gouraud, int fst) {
    anything else textured, or 3D, reaching outside the middle 3/4 of the frame width. 2D across the
    whole width that is a band (up to ~1/3 of the height) or of one colour (a fade, a flash) is kept
    apart: over 3D that reaches the sides it covers them too (gpu_vk.c); a picture across the width
-   (an illustration) keeps its shape. From the vertices since `first`. */
+   (an illustration) keeps its shape. 2D drawn during a fight (its HUD) is marked: in widescreen
+   each half goes to its side of the screen (gpu_vk.c). From the vertices since `first`. */
 static void classify(GpuDraw *d, int type, u32 first) {
     float x0 = 1e9f, x1 = -1e9f;
     for (u32 i = first; i < rec->nverts; i++) {
@@ -948,6 +949,8 @@ static void classify(GpuDraw *d, int type, u32 first) {
     if (gs_cur_path != 1 && type >= 3 && d->tex >= -1 && full_scissor)
         d->flat2d = d->textured || x0 > 0 || x1 < (float)fw;
     d->sides = !d->flat2d && (d->tex >= 0 || gs_cur_path == 1) && full_scissor && (x0 < fw / 8.0f || x1 > fw * 7 / 8.0f);
+    int fight_on(void);                         /* port/hle/training.c */
+    d->fight = d->flat2d && fight_on();
     d->fullw = 0;
     if (d->flat2d && x0 <= 0.5f && x1 >= (float)fw - 0.5f) {
         float y0 = 1e9f, y1 = -1e9f;

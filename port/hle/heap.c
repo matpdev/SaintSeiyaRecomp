@@ -5,6 +5,8 @@
  * right there; the crash report (rt_fatal) says which registers point into a freed block and who
  * freed it.
  *
+ * Every free is also told to training.c (the end of a fight).
+ *
  * Blocks start after a header beginning with "MEM" (16-byte aligned), as the allocator finds them:
  * a block ends where the next header starts.
  */
@@ -33,6 +35,8 @@ static int is_header(u32 a) {
 void hle_heap_free(Ctx *c) {
     if (poison < 0) poison = getenv("SSTHEH_POISON_FREE") && atoi(getenv("SSTHEH_POISON_FREE"));
     u32 p = RW(5) & 0x01FFFFFF;
+    void training_freed(u32 p);              /* training.c: the battle object's end */
+    if (p) training_freed(p);
     if (!poison || !p) return;
     u32 end = (p + 15) & ~15u;
     while (end < 0x02000000 && end - p < (4u << 20) && !is_header(end)) end += 16;

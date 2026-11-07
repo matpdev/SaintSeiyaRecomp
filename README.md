@@ -126,7 +126,8 @@ vertical blanks, no window). Environment variables:
 |---|---|
 | `SSTHEH_VSYNC=1` | start with vsync (default: no fps limit) |
 | `SSTHEH_WINDOW=WxH` | window size at start, e.g. `2560x1440`, or `full` (default: 1920x1080, or the last one chosen with F1) |
-| `SSTHEH_WIDESCREEN=0` | original 4:3 picture (default: 16:9, a wider 3D view with menus and HUD kept in their 4:3 shapes; full-screen 4:3 art gets blurred sides) |
+| `SSTHEH_WIDESCREEN=0` | original 4:3 picture (default: 16:9, a wider 3D view with menus and HUD kept in their 4:3 shapes; full-screen 4:3 art gets blurred sides; in fights the life bars reach the screen's edges) |
+| `SSTHEH_WIDE_HUD=0` | in widescreen, the fight HUD (life bars, portraits, cosmo gauges) in the middle 4:3 instead of at the edges |
 | `SSTHEH_SHOT_PRESENT=WxH` | `--shot` saves the picture as a window that size shows it (widescreen, sides) instead of the PS2 frame |
 | `SSTHEH_TEX_DUMP=1` | save every texture the game uses as PNG in `~/.local/share/sstheh/textures/dump/` (or `dump/` in the `SSTHEH_TEXTURES` folder) |
 | `SSTHEH_RAM_DUMP=1` | `--shot` also saves the EE's 32 MB as `build/ram_N.bin` (for finding the game's variables) |
