@@ -29,6 +29,7 @@ controle e memory card.
 | Taxa de quadros | 60 Hz (modo NTSC do próprio jogo, com a região europeia); quadros interpolados entre os do jogo, sem limite (ou vsync, F4) |
 | Som | música e vozes (CRI ADX) e **efeitos sonoros** (golpes, passos, menus: o driver SSD/RSSD do disco, interpretado, tocando num SPU2 emulado), com o reverb do SPU2 |
 | Vídeo | o vídeo de abertura (Sofdec), decodificado com FFmpeg |
+| Texto | os textos do jogo desenhados com um arquivo de fonte a 4x (M PLUS Rounded 1c, baixada para `fonts/` pelo `build.sh` / `tools/fetch_font.sh`), no layout e nas cores do próprio jogo |
 | Extras | um modo de treino que o original não tem (F5: oponente parado, vida infinita, dano e inputs na tela); um segundo controle joga como jogador 2 |
 | Decompilação | compilador identificado (Metrowerks CodeWarrior PS2 3.0.1, `-O3`, C++), 327 funções de biblioteca nomeadas; nenhuma função do jogo decompilada ainda |
 | Memory card | o slot 1 é uma pasta (`~/.local/share/sstheh/memcard1`): o jogo salva e carrega normalmente |
@@ -43,10 +44,11 @@ jogo está neste repositório. A tradução brasileira de fãs é outro build (c
 
 ### 1. Requisitos (Linux x86-64)
 
-- GCC, Python 3, `ninja`, `glslc` (pacote `shaderc`), SDL3 (3.2 ou mais nova), um driver Vulkan e as
-  bibliotecas do FFmpeg (para o vídeo de abertura; sem elas ele é pulado)
-  - Arch: `sudo pacman -S gcc python ninja shaderc sdl3 vulkan-icd-loader ffmpeg` (mais o driver da sua placa)
-  - Debian/Ubuntu: `sudo apt install gcc python3-venv ninja-build glslc libsdl3-dev libvulkan1 libavformat-dev libavcodec-dev libswscale-dev libswresample-dev`
+- GCC, Python 3, `ninja`, `glslc` (pacote `shaderc`), SDL3 (3.2 ou mais nova), um driver Vulkan, as
+  bibliotecas do FFmpeg (para o vídeo de abertura; sem elas ele é pulado) e o FreeType (para os textos em HD; sem
+  ele ficam com a fonte do disco)
+  - Arch: `sudo pacman -S gcc python ninja shaderc sdl3 vulkan-icd-loader ffmpeg freetype2` (mais o driver da sua placa)
+  - Debian/Ubuntu: `sudo apt install gcc python3-venv ninja-build glslc libsdl3-dev libvulkan1 libavformat-dev libavcodec-dev libswscale-dev libswresample-dev libfreetype-dev`
 - o GCC também é usado para os programas de VU1 do jogo: eles são compilados para código nativo a partir do
   executável, antes de jogar (`build/sstheh --compile-vu`, que o `build.sh` roda, uns 20 s), e guardados em
   `~/.cache/sstheh/vu`; os que faltarem são compilados em segundo plano quando o jogo abre
@@ -134,6 +136,7 @@ indicados, sem janela). Variáveis de ambiente:
 | `SSTHEH_WIDE_SELECT=0` | no widescreen, as faixas de retratos da seleção de personagens como no disco (padrão: mais longas, até as bordas da tela) |
 | `SSTHEH_WIDE_HUD=0` | no widescreen, o HUD da luta (barras de vida, retratos, medidores de cosmo) no 4:3 do meio em vez de nas bordas |
 | `SSTHEH_SHOT_PRESENT=LxA` | o `--shot` salva a imagem como uma janela desse tamanho mostra (widescreen, laterais) em vez do quadro do PS2 |
+| `SSTHEH_FONT=arquivo` / `=0` | a fonte usada nos textos (padrão: o primeiro .ttf/.otf em `~/.local/share/sstheh/fonts/`, senão `fonts/`) / a fonte do disco |
 | `SSTHEH_TEX_DUMP=1` | salva cada textura que o jogo usa como PNG em `~/.local/share/sstheh/textures/dump/` (ou `dump/` na pasta de `SSTHEH_TEXTURES`) |
 | `SSTHEH_RAM_DUMP=1` | o `--shot` também salva os 32 MB do EE em `build/ram_N.bin` (para achar variáveis do jogo) |
 | `SSTHEH_TEXTURES=0` | não usa texturas substitutas (`~/.local/share/sstheh/textures/<nome>.png`, de qualquer tamanho; `tools/upscale_textures.sh` gera um pacote HD com o Real-ESRGAN) |

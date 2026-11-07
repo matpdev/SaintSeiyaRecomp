@@ -89,14 +89,27 @@ def main():
             print("FFmpeg (libavformat, libavcodec, libavutil, libswscale, libswresample) not found: the opening video is skipped")
         n.rule("cc_ffmpeg", f"gcc -c -O2 -g -w -fno-strict-aliasing -ffp-contract=off -march=native {inc} {ff_cflags} -MMD -MF $out.d $in -o $out",
                depfile="$out.d", deps="gcc", description="cc $in")
-        n.rule("link", f"gcc -rdynamic $in -o $out -lm -lpthread -lSDL3 -ldl {ff_libs or ''}", description="link $out")
+        # FreeType draws the game's texts with a font file (port/hle/textfont.c); without it they stay as on the disc
+        def ft(arg):
+            try:
+                return subprocess.run(["pkg-config", arg, "freetype2"], capture_output=True, text=True, check=True).stdout.strip()
+            except (OSError, subprocess.CalledProcessError):
+                return None
+        ft_libs = ft("--libs")
+        ft_cflags = "-DSSTHEH_FREETYPE " + ft("--cflags") if ft_libs is not None else ""
+        if ft_libs is None:
+            print("FreeType (freetype2) not found: the game's texts keep the disc's font")
+        n.rule("cc_freetype", f"gcc -c -O2 -g -w -fno-strict-aliasing -ffp-contract=off -march=native {inc} {ft_cflags} -MMD -MF $out.d $in -o $out",
+               depfile="$out.d", deps="gcc", description="cc $in")
+        n.rule("link", f"gcc -rdynamic $in -o $out -lm -lpthread -lSDL3 -ldl {ff_libs or ''} {ft_libs or ''}", description="link $out")
         rc_files = [f"build/recomp/rc_{k:03d}.c" for k in range(RC_FILES)] + ["build/recomp/functab.c"]
         n.build(rc_files, "recomp", code, implicit=["tools/recomp/recomp.py", "port/hle.txt"])
         port_srcs = sorted(glob.glob("port/**/*.c", recursive=True))
         port_objs = []
         for src in rc_files + port_srcs:
             o = "build/port/" + src.replace("/", "_")[:-2] + ".o"
-            rule = "cc" if src.startswith("build/recomp/") else "cc_ffmpeg" if src == "port/hle/movie.c" else "cc_fast"
+            rule = ("cc" if src.startswith("build/recomp/") else "cc_ffmpeg" if src == "port/hle/movie.c"
+                    else "cc_freetype" if src == "port/hle/textfont.c" else "cc_fast")
             n.build(o, rule, src,
                     order_only=rc_files + ["build/shaders/shaders.h"])
             port_objs.append(o)

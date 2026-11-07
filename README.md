@@ -29,6 +29,7 @@ controller and memory card.
 | Frame rate | 60 Hz (the game's own NTSC mode, keeping the European region); frames interpolated between the game's, unlimited (or vsync, F4) |
 | Sound | music and voices (CRI ADX) and **sound effects** (hits, footsteps, menus: the disc's SSD/RSSD driver, interpreted, playing on an emulated SPU2), with the SPU2's reverb |
 | Video | the opening video (Sofdec), decoded with FFmpeg |
+| Text | the game's texts drawn with a font file at 4x (M PLUS Rounded 1c, downloaded into `fonts/` by `build.sh` / `tools/fetch_font.sh`), in the game's own layout and colours |
 | Extras | a training mode the original doesn't have (F5: idle opponent, infinite life, damage and inputs on screen); a second gamepad plays as player 2 |
 | Decompilation | compiler identified (Metrowerks CodeWarrior PS2 3.0.1, `-O3`, C++), 327 library functions named; no game function decompiled yet |
 | Memory card | slot 1 is a folder (`~/.local/share/sstheh/memcard1`): the game saves and loads normally |
@@ -44,10 +45,11 @@ does not work.
 
 ### 1. Requirements (Linux x86-64)
 
-- GCC, Python 3, `glslc` (the `shaderc` package), SDL3 (3.2 or newer), a Vulkan driver and FFmpeg's
-  libraries (for the opening video; without them it is skipped)
-  - Arch: `sudo pacman -S gcc python shaderc sdl3 vulkan-icd-loader ffmpeg` (plus your GPU's driver)
-  - Debian/Ubuntu: `sudo apt install gcc python3-venv glslc libsdl3-dev libvulkan1 libavformat-dev libavcodec-dev libswscale-dev libswresample-dev`
+- GCC, Python 3, `glslc` (the `shaderc` package), SDL3 (3.2 or newer), a Vulkan driver, FFmpeg's
+  libraries (for the opening video; without them it is skipped) and FreeType (for the texts in HD; without it
+  they keep the disc's font)
+  - Arch: `sudo pacman -S gcc python shaderc sdl3 vulkan-icd-loader ffmpeg freetype2` (plus your GPU's driver)
+  - Debian/Ubuntu: `sudo apt install gcc python3-venv glslc libsdl3-dev libvulkan1 libavformat-dev libavcodec-dev libswscale-dev libswresample-dev libfreetype-dev`
 - GCC is also used for the game's VU1 programs: they are compiled to native code from the executable,
   ahead of time (`build/sstheh --compile-vu`, which `build.sh` runs, about 20 s), and kept in
   `~/.cache/sstheh/vu`; any missing ones are compiled in the background when the game starts
@@ -136,6 +138,7 @@ vertical blanks, no window). Environment variables:
 | `SSTHEH_WIDE_SELECT=0` | in widescreen, the character select's portrait strips as on the disc (default: longer, reaching the screen's edges) |
 | `SSTHEH_WIDE_HUD=0` | in widescreen, the fight HUD (life bars, portraits, cosmo gauges) in the middle 4:3 instead of at the edges |
 | `SSTHEH_SHOT_PRESENT=WxH` | `--shot` saves the picture as a window that size shows it (widescreen, sides) instead of the PS2 frame |
+| `SSTHEH_FONT=file` / `=0` | the font the texts are drawn with (default: the first .ttf/.otf in `~/.local/share/sstheh/fonts/`, else `fonts/`) / the disc's font |
 | `SSTHEH_TEX_DUMP=1` | save every texture the game uses as PNG in `~/.local/share/sstheh/textures/dump/` (or `dump/` in the `SSTHEH_TEXTURES` folder) |
 | `SSTHEH_RAM_DUMP=1` | `--shot` also saves the EE's 32 MB as `build/ram_N.bin` (for finding the game's variables) |
 | `SSTHEH_TEXTURES=0` | don't use replacement textures (`~/.local/share/sstheh/textures/<name>.png`, any size; `tools/upscale_textures.sh` makes an HD pack with Real-ESRGAN) |

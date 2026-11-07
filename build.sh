@@ -41,6 +41,15 @@ if [ -n "$missing" ]; then
     exit 1
 fi
 ok "dependencies: gcc, python3, glslc, SDL3"
+pkg-config --exists freetype2 2>/dev/null ||
+    info "optional: FreeType (freetype2 / libfreetype-dev) not found, the texts keep the disc's font"
+pkg-config --exists libavformat libavcodec libswscale libswresample 2>/dev/null ||
+    info "optional: FFmpeg's libraries not found, the opening video is skipped"
+# the font the game's texts are drawn with (not in the repository: downloaded once, OFL)
+if pkg-config --exists freetype2 2>/dev/null && [ ! -s fonts/MPLUSRounded1c-Bold.ttf ]; then
+    tools/fetch_font.sh >/dev/null 2>&1 && ok "font downloaded into fonts/" ||
+        info "optional: could not download the font (tools/fetch_font.sh), the texts keep the disc's font"
+fi
 
 # ---------------------------------------------------------------------------------- the disc
 mkdir -p disc

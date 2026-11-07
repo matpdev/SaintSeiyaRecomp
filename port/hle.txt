@@ -52,3 +52,4 @@
 0x002FF8A0 hle_mash_face before           # player controller: which face button pressed? (second one)
 0x002FF910 hle_mash_some before           # player controller: one of these buttons pressed?
 0x002F2630 hle_revival_check before       # round's end check: with revival off, a fighter at life 0 is knocked out (port/hle/bigbang.c)
+0x00155E40 hle_text_blit before          # a glyph written into a text's canvas: remembered to draw it with a font file, see port/hle/textfont.c

@@ -742,15 +742,35 @@ u64 texpack_name(const u32 *px, u32 w, u32 h);                 /* texpack.c */
 void texpack_dump(u64 name, const u32 *px, u32 w, u32 h);
 u32 *texpack_find(u64 name, u32 *w, u32 *h);
 
+/* An 8-bit texture's palette of 256 (its order in the CLUT buffer: CSM1's swizzle) */
+static void palette8(u32 *pal, u32 cbp, u32 cpsm) {
+    for (u32 i = 0; i < 256; i++) {
+        u32 c = (i & 0xE7) | ((i & 8) << 1) | ((i & 0x10) >> 1);
+        pal[i] = expand(vram_rw(cbp, 1, cpsm, c & 15, c >> 4, 0, 0), cpsm);
+    }
+}
+
+/* A PSMT8 texture's texels (indices), as tex_decode reads them */
+static void texels8(u8 *out, u32 tbp, u32 tbw, u32 tw, u32 th) {
+    u32 bw = tbw ? tbw : 1;
+    for (u32 y = 0; y < th; y++) {
+        u32 row = tbp + (y >> 6) * 32 * (bw >> 1);
+        const u16 *in = in8[y & 63];
+        for (u32 x = 0; x < tw; x++) {
+            u32 a = ((row + (x >> 7) * 32) << 8) + in[x & 127];
+            out[y * tw + x] = (u8)(vram[(a >> 2) & 0xFFFFF] >> ((a & 3) * 8));
+        }
+    }
+}
+
+int textfont_active(void);                                      /* port/hle/textfont.c */
+u32 *textfont_replace(const u8 *texels, u32 tw, u32 th, const u32 *pal, u32 *w_out, u32 *h_out);
+
 /* The texture at tbp as RGBA (tw x th), as texel() reads it: the palette expanded once, the
  * buffer's row worked out once per line. */
 static void tex_decode(u32 *px, u32 tbp, u32 tbw, u32 psm, u32 tw, u32 th, u32 cbp, u32 cpsm, u32 csa) {
     u32 bits = psm_bits(psm), pal[256];
-    if (bits == 8)
-        for (u32 i = 0; i < 256; i++) {
-            u32 c = (i & 0xE7) | ((i & 8) << 1) | ((i & 0x10) >> 1);
-            pal[i] = expand(vram_rw(cbp, 1, cpsm, c & 15, c >> 4, 0, 0), cpsm);
-        }
+    if (bits == 8) palette8(pal, cbp, cpsm);
     else if (bits == 4)
         for (u32 i = 0; i < 16; i++) {
             u32 c = i + (csa & 15) * 16;
@@ -856,6 +876,14 @@ static s32 texture_for(int ctx, u32 *w_out, u32 *h_out) {
         u64 name = texpack_name(px, tw, th);
         texpack_dump(name, px, tw, th);
         u32 uw = tw, uh = th, *rp = texpack_find(name, &uw, &uh);
+        if (!rp && psm == 0x13 && textfont_active()) {      /* a text the game wrote: drawn with the font file */
+            u8 *ix = malloc((size_t)tw * th);
+            u32 pal[256];
+            texels8(ix, tbp, tbw, tw, th);
+            palette8(pal, cbp, cpsm);
+            rp = textfont_replace(ix, tw, th, pal, &uw, &uh);
+            free(ix);
+        }
         tex_ents[idx].plain = 1;                 /* every texel within a few levels of the first */
         for (u32 i = 1; i < tw * th && tex_ents[idx].plain; i++)
             for (int sh = 0; sh < 32; sh += 8) {
