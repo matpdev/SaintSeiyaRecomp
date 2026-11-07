@@ -7,8 +7,10 @@
  *     and a hit is never allowed to knock it out;
  *   - the damage of the last hit and of the combo, and the life of both;
  *   - the first player's inputs, newest first, with how many frames each was held.
+ * The same menu has, for every fight, training or not, "Auto-mash (Big Bang)" and "Revival (Athena)"
+ * (bigbang.c).
  * The options are kept from one run to the next; SSTHEH_TRAINING=1 (=0) sets them all on (off)
- * for this run only.
+ * for this run only (training's), SSTHEH_AUTOMASH=1 (=0) the auto-mash, SSTHEH_REVIVAL=0 (=1) revivals.
  *
  * What the game has (found 2026-11, see the notes in docs/):
  *   0x002F9140 the battle's step (a0 = battle): +968/+972 the two fighters, +976/+980 their
@@ -38,8 +40,9 @@
 #define COMBO_FRAMES 45       /* hits closer than this belong to one combo */
 #define HIST 14
 
-enum { OPT_ON, OPT_IDLE, OPT_LIFE, OPT_DAMAGE, OPT_INPUTS, NOPT };
-static const char *opt_name[NOPT] = {"Training mode", "Opponent (computer)", "Infinite life", "Show damage", "Show inputs"};
+enum { OPT_ON, OPT_IDLE, OPT_LIFE, OPT_DAMAGE, OPT_INPUTS, OPT_MASH, OPT_REVIVAL, NOPT };
+static const char *opt_name[NOPT] = {"Training mode", "Opponent (computer)", "Infinite life", "Show damage", "Show inputs",
+                                     "Auto-mash (Big Bang)", "Revival (Athena)"};
 static volatile int opt[NOPT];
 static volatile int menu_open, menu_sel;
 
@@ -91,18 +94,34 @@ static void init(void) {
     if (done) return;
     done = 1;
     opt[OPT_IDLE] = opt[OPT_LIFE] = opt[OPT_DAMAGE] = opt[OPT_INPUTS] = 1;   /* once training is turned on */
+    opt[OPT_REVIVAL] = 1;                                                     /* as the game */
     const char *e = getenv("SSTHEH_TRAINING");
     if (e) {
-        for (int i = 0; i < NOPT; i++) opt[i] = atoi(e) != 0;
-        return;
+        for (int i = 0; i < OPT_MASH; i++) opt[i] = atoi(e) != 0;
+    } else {
+        char path[1100], buf[16] = "";
+        display_config_path(path, sizeof path, "training");
+        FILE *f = fopen(path, "r");
+        if (f) {
+            if (fgets(buf, sizeof buf, f))
+                for (int i = 0; i < NOPT && (buf[i] == '0' || buf[i] == '1'); i++) opt[i] = buf[i] == '1';
+            fclose(f);
+        }
     }
-    char path[1100], buf[16] = "";
-    display_config_path(path, sizeof path, "training");
-    FILE *f = fopen(path, "r");
-    if (!f) return;
-    if (fgets(buf, sizeof buf, f))
-        for (int i = 0; i < NOPT && (buf[i] == '0' || buf[i] == '1'); i++) opt[i] = buf[i] == '1';
-    fclose(f);
+    if ((e = getenv("SSTHEH_AUTOMASH"))) opt[OPT_MASH] = atoi(e) != 0;
+    if ((e = getenv("SSTHEH_REVIVAL"))) opt[OPT_REVIVAL] = atoi(e) != 0;
+}
+
+/* a fighter whose life runs out may stand up again (bigbang.c) */
+int training_revival(void) {
+    init();
+    return opt[OPT_REVIVAL];
+}
+
+/* auto-mash (bigbang.c): in any fight, training or not */
+int training_automash(void) {
+    init();
+    return opt[OPT_MASH];
 }
 
 static void toggle(int i) {
@@ -291,7 +310,7 @@ int training_hud(SDL_Surface *surf) {
         float w = 40 * 8, h = (NOPT + 4) * 12, x = (W - w) / 2, y = (H - h) / 2;
         box(r, x - 8, y - 8, w + 16, h + 16);
         SDL_SetRenderDrawColor(r, 255, 220, 0, 255);
-        SDL_RenderDebugText(r, x, y, "TRAINING");
+        SDL_RenderDebugText(r, x, y, "TRAINING AND OPTIONS");
         for (int i = 0; i < NOPT; i++) {
             const char *v = i == OPT_IDLE ? (opt[i] ? "idle" : "plays") : opt[i] ? "on" : "off";
             snprintf(line, sizeof line, "%c %-22s %s", i == menu_sel ? '>' : ' ', opt_name[i], v);
@@ -299,7 +318,7 @@ int training_hud(SDL_Surface *surf) {
             SDL_RenderDebugText(r, x, y + 18 + (float)i * 12, line);
         }
         SDL_SetRenderDrawColor(r, 160, 160, 160, 255);
-        SDL_RenderDebugText(r, x, y + 18 + NOPT * 12 + 6, fight ? "Cross: change  Circle: close" : "In fights. Cross: change  Circle: close");
+        SDL_RenderDebugText(r, x, y + 18 + NOPT * 12 + 6, "Cross: change  Circle: close");
     }
     SDL_RenderPresent(r);
     return 1;

@@ -115,6 +115,12 @@ escolhas ficam salvas. Com *Training mode* ligado, em toda luta:
 
 Contra um segundo jogador (segundo gamepad), o oponente é jogado por esse controle.
 
+O mesmo menu tem **Auto-mash (Big Bang)**, para toda luta (treino ou não, história incluída): na disputa do Big Bang
+Counter e quando a vida de um lutador acaba (Atena chamando para levantar), o port aperta ✕ ○ □ △ pelos jogadores,
+cerca de 20 vezes por segundo; o toque no tempo do contra-ataque (o botão mostrado na tela) continua seu.
+**Revival (Athena)** desligado: o lutador cuja vida acaba é nocauteado, sem a cena de Atena chamando para levantar
+(qualquer lutador, história incluída).
+
 ### Opções
 
 `--iso <arquivo>` (padrão `disc/game.iso`), `-q` / `-v` / `-vv` (log), `--shot N,M` (salva capturas nos vblanks
@@ -136,6 +142,8 @@ indicados, sem janela). Variáveis de ambiente:
 | `SSTHEH_50HZ=1` | modo PAL original (50 Hz) |
 | `SSTHEH_30FPS_SCENES=1` | menus e telas 2D a 30 fps, como no disco |
 | `SSTHEH_PAD2=1` | um controle na porta 2 mesmo sem segundo gamepad (modos de dois jogadores) |
+| `SSTHEH_AUTOMASH=1` / `=0` | mash automático nos eventos de Big Bang ligado / desligado, só nesta execução (padrão: a escolha do menu F5) |
+| `SSTHEH_REVIVAL=0` / `=1` | ressurreições (Atena) desligadas / ligadas, só nesta execução (padrão: a escolha do menu F5, ligadas) |
 | `SSTHEH_TRAINING=1` / `=0` | modo de treino com todas as opções ligadas / desligadas, só nesta execução (padrão: as escolhas do menu F5) |
 | `SSTHEH_UNLOCK_ALL=1` | cheat: libera tudo (modos, personagens, cenários, extras); salvando, fica no save |
 | `SSTHEH_MEMCARD=pasta` | onde fica o memory card (padrão `~/.local/share/sstheh/memcard1`) |

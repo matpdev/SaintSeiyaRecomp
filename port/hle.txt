@@ -47,3 +47,8 @@
 0x0017A1E0 hle_csel_lists before          # character select: elements into the draw lists
 0x001419B0 hle_csel_closing before        # in a draw list?: from the closing character select, the new pieces taken out
 0x0017A030 hle_csel_show before           # character select: everything shown or hidden
+0x002FF9D0 hle_mash_any before            # player controller: any button pressed? (Big Bang events: auto-mash, see port/hle/bigbang.c)
+0x002FF960 hle_mash_face before           # player controller: which face button pressed?
+0x002FF8A0 hle_mash_face before           # player controller: which face button pressed? (second one)
+0x002FF910 hle_mash_some before           # player controller: one of these buttons pressed?
+0x002F2630 hle_revival_check before       # round's end check: with revival off, a fighter at life 0 is knocked out (port/hle/bigbang.c)

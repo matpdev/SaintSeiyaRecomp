@@ -117,6 +117,12 @@ choices are remembered. With *Training mode* on, in every fight:
 
 Against a second player (second gamepad) the opponent is played by that pad.
 
+The same menu has **Auto-mash (Big Bang)**, for every fight (training or not, story included): in a Big Bang
+Counter's clash and when a fighter's life runs out (Athena calling them to stand up), the port presses ✕ ○ □ △
+for the players, about 20 times a second; the counter's timing press (the button shown on the screen) stays yours.
+**Revival (Athena)** off: a fighter whose life runs out is knocked out, without Athena's scene calling them to stand
+up again (any fighter, story included).
+
 ### Options
 
 `--iso <file>` (default `disc/game.iso`), `-q` / `-v` / `-vv` (log), `--shot N,M` (saves screenshots at those
@@ -138,6 +144,8 @@ vertical blanks, no window). Environment variables:
 | `SSTHEH_50HZ=1` | original PAL mode (50 Hz) |
 | `SSTHEH_30FPS_SCENES=1` | menus and 2D screens at 30 fps, as on the disc |
 | `SSTHEH_PAD2=1` | a controller in port 2 even without a second gamepad (two-player modes) |
+| `SSTHEH_AUTOMASH=1` / `=0` | auto-mash in Big Bang events on / off, for this run (default: the F5 menu's choice) |
+| `SSTHEH_REVIVAL=0` / `=1` | revivals (Athena) off / on, for this run (default: the F5 menu's choice, on) |
 | `SSTHEH_TRAINING=1` / `=0` | training mode with every option on / off, for this run (default: the choices made in the F5 menu) |
 | `SSTHEH_UNLOCK_ALL=1` | cheat: unlocks everything (modes, characters, stages, extras); kept in the save once saved |
 | `SSTHEH_MEMCARD=folder` | where the memory card lives (default `~/.local/share/sstheh/memcard1`) |
