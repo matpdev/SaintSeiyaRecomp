@@ -54,3 +54,6 @@
 0x002F2630 hle_revival_check before       # round's end check: with revival off, a fighter at life 0 is knocked out (port/hle/bigbang.c)
 0x00155E40 hle_text_blit before          # a glyph written into a text's canvas: remembered to draw it with a font file, see port/hle/textfont.c
 0x00315070 hle_com_face                # computer controller: which face button? (a draw); none for the Big Bang Counter when it is off, see port/hle/bigbang.c
+0x00224180 hle_training_menu_texts before   # a list of texts: the character select's mode menu gets "Training" (port/hle/training.c)
+0x0013BA20 hle_training_menu_cursor before  # a list's cursor set: the mode menu's first one stays on "Back to main menu"
+0x0013DC10 hle_training_menu_chosen before  # an owner told: the mode menu's choice, "Training" = 1P VS COM with training on

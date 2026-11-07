@@ -29,6 +29,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 
 #include "r5900.h"
@@ -45,6 +46,8 @@ enum { OPT_ON, OPT_IDLE, OPT_LIFE, OPT_DAMAGE, OPT_INPUTS, OPT_MASH, OPT_REVIVAL
 static const char *opt_name[NOPT] = {"Training mode", "Opponent (computer)", "Infinite life", "Show damage", "Show inputs",
                                      "Auto-mash (Big Bang)", "Revival (Athena)", "Big Bang Counter"};
 static volatile int opt[NOPT];
+static volatile int session = -1;           /* training: -1 the F5 menu's choice, 1 chosen in the mode menu */
+static int training_on(void) { return session >= 0 ? session : opt[OPT_ON]; }
 static volatile int menu_open, menu_sel;
 
 u32 kernel_vblank_count(void);
@@ -133,7 +136,8 @@ int training_automash(void) {
 }
 
 static void toggle(int i) {
-    opt[i] = !opt[i];
+    if (i == OPT_ON && session >= 0) { opt[i] = !session; session = -1; }   /* from what is on now */
+    else opt[i] = !opt[i];
     if (!getenv("SSTHEH_TRAINING")) save();
 }
 
@@ -163,7 +167,7 @@ void hle_training_battle(Ctx *c) {
         if (!f) { s->block = 0; continue; }
         if (s->block != f + LIFE_OFF) { memset(s, 0, sizeof *s); s->block = f + LIFE_OFF; s->before = -1; }
         settle(c, s);
-        if (opt[OPT_ON] && opt[OPT_LIFE] && frame_no - s->last_hit >= REFILL_FRAMES && rdf(c, s->block) < 100.0f)
+        if (training_on() && opt[OPT_LIFE] && frame_no - s->last_hit >= REFILL_FRAMES && rdf(c, s->block) < 100.0f)
             wrf(c, s->block, 100.0f);
     }
     /* the first player's inputs */
@@ -193,20 +197,69 @@ void hle_training_damage(Ctx *c) {
         Side *s = &side[k];
         if (!s->block || s->block != RW(4)) continue;
         settle(c, s);                       /* a hit before it in the same frame */
-        if (opt[OPT_ON] && opt[OPT_LIFE] && rdf(c, s->block) < 50.0f) wrf(c, s->block, 100.0f);   /* never knocked out */
+        if (training_on() && opt[OPT_LIFE] && rdf(c, s->block) < 50.0f) wrf(c, s->block, 100.0f);   /* never knocked out */
         s->before = rdf(c, s->block);
     }
 }
 
 /* 0x002FF490 (before): a controller's common step; the computer's decision cleared */
 void hle_training_controller(Ctx *c) {
-    if (!opt[OPT_ON] || !opt[OPT_IDLE]) return;
+    if (!training_on() || !opt[OPT_IDLE]) return;
     u32 ctl = RW(4);
     if (rd32(c, ctl + 8) != VT_COM) return;
     wr16(c, ctl + 0x158, 0);
     wr8(c, ctl + 0x164, 0);
     wr8(c, ctl + 0x165, 0);
     wr8(c, ctl + 0x166, 0);
+}
+
+/* ---- "Training" in the character select's mode menu (○ there: 1P VS 2P, 1P VS COM, COM VS 2P,
+ * COM VS COM, Back to main menu)
+ *
+ * The menu (0x0017E560, its step 0x0017E1C0) is a list of texts (0x00224180: menu, texts ending with
+ * a 0, ..., count 5 for its height, from 0x0017E710); its cursor starts on the last (0x0013BA20 from 0x0017E720); the item chosen
+ * becomes a mode code from the table at 0x003E74C0 (1 1P VS 2P, 2 1P VS COM, 3 COM VS 2P, 4 COM VS
+ * COM, -1 back) at menu-scene+72, then the owner is told (0x0013DC10 from 0x0017E350). Here the list
+ * gets a sixth text, "Training", before "Back to main menu": chosen, it is 1P VS COM with the training
+ * mode on (until another mode is chosen there; the F5 menu's choice is kept apart). */
+
+/* 0x00224180 (before): the list's texts */
+void hle_training_menu_texts(Ctx *c) {
+    if (RW(31) != 0x0017E710 || RW(9) != 5) return;
+    u8 regs[offsetof(Ctx, thread)];
+    memcpy(regs, c, sizeof regs);
+    static const char label[] = "Training";
+    u32 size = 7 * 4 + (u32)(sizeof label + 1) * 2;     /* 6 texts and the 0 that ends the list */
+    SET32(4, size);
+    SET32(31, 0);
+    rt_call(c, 0x00100670);                 /* the game's allocator (a few bytes per menu opened) */
+    u32 block = RW(2);
+    memcpy(c, regs, sizeof regs);
+    if (!block) return;
+    u32 old = RW(5), text = block + 7 * 4;
+    for (u32 i = 0; i < 4; i++) wr32(c, block + 4 * i, rd32(c, old + 4 * i));
+    wr32(c, block + 16, text);
+    wr32(c, block + 20, rd32(c, old + 16));
+    wr32(c, block + 24, 0);
+    for (u32 i = 0; i < sizeof label; i++) wr16(c, text + 2 * i, (u8)label[i]);   /* UTF-16, ending as the game's: 0, 0xFF */
+    wr16(c, text + 2 * (u32)sizeof label, 0xFF);
+    SET32(5, block);
+    SET32(9, 6);
+}
+
+/* 0x0013BA20 (before): the list's first cursor, from 0x0017E720: still on "Back to main menu" */
+void hle_training_menu_cursor(Ctx *c) {
+    if (RW(31) == 0x0017E720 && RW(5) == 4) SET32(5, 5);
+}
+
+/* 0x0013DC10 (before): the owner told the mode chosen, from 0x0017E350 (a0 = menu-scene + 64) */
+void hle_training_menu_chosen(Ctx *c) {
+    if (RW(31) != 0x0017E350) return;
+    u32 scene = RW(4) - 64, menu = rd32(c, scene + 76);
+    s16 item = (s16)rd16(c, menu + 184);
+    if (item == 4) { wr32(c, scene + 72, 2); session = 1; rt_log("train", "training chosen in the mode menu"); }
+    else if (item == 5) wr32(c, scene + 72, 0xFFFFFFFFu);
+    else session = -1;
 }
 
 /* ---- window side */
@@ -273,7 +326,7 @@ static void box(SDL_Renderer *r, float x, float y, float w, float h) {
 int training_hud(SDL_Surface *surf) {
     init();
     int fight = in_fight();
-    if (!menu_open && !(opt[OPT_ON] && fight)) return 0;
+    if (!menu_open && !(training_on() && fight)) return 0;
     static SDL_Renderer *r;
     static SDL_Surface *for_surf;
     if (for_surf != surf) { if (r) SDL_DestroyRenderer(r); r = SDL_CreateSoftwareRenderer(surf); for_surf = surf; }
@@ -284,7 +337,7 @@ int training_hud(SDL_Surface *surf) {
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
     float W = (float)surf->w, H = (float)surf->h;
     char line[96];
-    if (opt[OPT_ON] && fight) {
+    if (training_on() && fight) {
         pthread_mutex_lock(&lock);
         __typeof__(shown) s = shown;
         pthread_mutex_unlock(&lock);
@@ -320,7 +373,8 @@ int training_hud(SDL_Surface *surf) {
         SDL_SetRenderDrawColor(r, 255, 220, 0, 255);
         SDL_RenderDebugText(r, x, y, "TRAINING AND OPTIONS");
         for (int i = 0; i < NOPT; i++) {
-            const char *v = i == OPT_IDLE ? (opt[i] ? "idle" : "plays") : opt[i] ? "on" : "off";
+            int on = i == OPT_ON ? training_on() : opt[i];
+            const char *v = i == OPT_IDLE ? (on ? "idle" : "plays") : on ? "on" : "off";
             snprintf(line, sizeof line, "%c %-22s %s", i == menu_sel ? '>' : ' ', opt_name[i], v);
             SDL_SetRenderDrawColor(r, 255, 255, 255, i == menu_sel ? 255 : 170);
             SDL_RenderDebugText(r, x, y + 18 + (float)i * 12, line);

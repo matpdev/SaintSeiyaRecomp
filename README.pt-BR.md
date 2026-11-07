@@ -107,6 +107,9 @@ segundo como jogador 2 (modos de dois jogadores, ex. 1P vs 2P na Guerra dos Mil 
 
 ### Treino
 
+Na Guerra dos Mil Dias, ○ na seleção de personagens abre o menu de modo do jogo, que agora tem **Training**: uma
+luta 1P VS COM com o modo de treino ligado (escolher outro modo ali volta à escolha do menu F5).
+
 F5 (ou Select + Start) abre um menu por cima do jogo; ele é usado com o controle (↑/↓, ✕ muda, ○ fecha) e as
 escolhas ficam salvas. Com *Training mode* ligado, em toda luta:
 

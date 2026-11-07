@@ -109,6 +109,9 @@ Gamepads are picked up when they are connected: the first plays with the keyboar
 
 ### Training
 
+In 1,000 Days War, ○ on the character select opens the game's mode menu, which now has **Training**: a 1P VS
+COM fight with training mode on (choosing another mode there goes back to the F5 menu's choice).
+
 F5 (or Select + Start) opens a menu over the game; it drives with the pad (↑/↓, ✕ changes, ○ closes) and its
 choices are remembered. With *Training mode* on, in every fight:
 
