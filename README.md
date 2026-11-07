@@ -123,7 +123,8 @@ The same menu has **Auto-mash (Big Bang)**, for every fight (training or not, st
 Counter's clash and when a fighter's life runs out (Athena calling them to stand up), the port presses ✕ ○ □ △
 for the players, about 20 times a second; the counter's timing press (the button shown on the screen) stays yours.
 **Revival (Athena)** off: a fighter whose life runs out is knocked out, without Athena's scene calling them to stand
-up again (any fighter, story included).
+up again (any fighter, story included). **Big Bang Counter** off: a Big Bang Attack can't be countered (the
+computer never presses the button shown, nor do you), so it never turns into a clash.
 
 ### Options
 
@@ -135,6 +136,7 @@ vertical blanks, no window). Environment variables:
 | `SSTHEH_VSYNC=1` | start with vsync (default: no fps limit) |
 | `SSTHEH_WINDOW=WxH` | window size at start, e.g. `2560x1440`, or `full` (default: 1920x1080, or the last one chosen with F1) |
 | `SSTHEH_WIDESCREEN=0` | original 4:3 picture (default: 16:9, a wider 3D view with menus and HUD kept in their 4:3 shapes; full-screen 4:3 art gets blurred sides; in fights the life bars reach the screen's edges) |
+| `SSTHEH_WIDE_2D=0` | in widescreen, story scenes whose 2D layers are larger than the screen cut at the 4:3 edges with blurred sides, as before (default: the layers' real art at the sides) |
 | `SSTHEH_WIDE_SELECT=0` | in widescreen, the character select's portrait strips as on the disc (default: longer, reaching the screen's edges) |
 | `SSTHEH_WIDE_HUD=0` | in widescreen, the fight HUD (life bars, portraits, cosmo gauges) in the middle 4:3 instead of at the edges |
 | `SSTHEH_SHOT_PRESENT=WxH` | `--shot` saves the picture as a window that size shows it (widescreen, sides) instead of the PS2 frame |
@@ -149,6 +151,7 @@ vertical blanks, no window). Environment variables:
 | `SSTHEH_PAD2=1` | a controller in port 2 even without a second gamepad (two-player modes) |
 | `SSTHEH_AUTOMASH=1` / `=0` | auto-mash in Big Bang events on / off, for this run (default: the F5 menu's choice) |
 | `SSTHEH_REVIVAL=0` / `=1` | revivals (Athena) off / on, for this run (default: the F5 menu's choice, on) |
+| `SSTHEH_BBCOUNTER=0` / `=1` | Big Bang Counters off / on, for this run (default: the F5 menu's choice, on) |
 | `SSTHEH_TRAINING=1` / `=0` | training mode with every option on / off, for this run (default: the choices made in the F5 menu) |
 | `SSTHEH_UNLOCK_ALL=1` | cheat: unlocks everything (modes, characters, stages, extras); kept in the save once saved |
 | `SSTHEH_MEMCARD=folder` | where the memory card lives (default `~/.local/share/sstheh/memcard1`) |

@@ -7,10 +7,11 @@
  *     and a hit is never allowed to knock it out;
  *   - the damage of the last hit and of the combo, and the life of both;
  *   - the first player's inputs, newest first, with how many frames each was held.
- * The same menu has, for every fight, training or not, "Auto-mash (Big Bang)" and "Revival (Athena)"
- * (bigbang.c).
+ * The same menu has, for every fight, training or not, "Auto-mash (Big Bang)", "Revival (Athena)" and
+ * "Big Bang Counter" (bigbang.c).
  * The options are kept from one run to the next; SSTHEH_TRAINING=1 (=0) sets them all on (off)
- * for this run only (training's), SSTHEH_AUTOMASH=1 (=0) the auto-mash, SSTHEH_REVIVAL=0 (=1) revivals.
+ * for this run only (training's), SSTHEH_AUTOMASH=1 (=0) the auto-mash, SSTHEH_REVIVAL=0 (=1) revivals,
+ * SSTHEH_BBCOUNTER=0 (=1) Big Bang Counters.
  *
  * What the game has (found 2026-11, see the notes in docs/):
  *   0x002F9140 the battle's step (a0 = battle): +968/+972 the two fighters, +976/+980 their
@@ -40,9 +41,9 @@
 #define COMBO_FRAMES 45       /* hits closer than this belong to one combo */
 #define HIST 14
 
-enum { OPT_ON, OPT_IDLE, OPT_LIFE, OPT_DAMAGE, OPT_INPUTS, OPT_MASH, OPT_REVIVAL, NOPT };
+enum { OPT_ON, OPT_IDLE, OPT_LIFE, OPT_DAMAGE, OPT_INPUTS, OPT_MASH, OPT_REVIVAL, OPT_COUNTER, NOPT };
 static const char *opt_name[NOPT] = {"Training mode", "Opponent (computer)", "Infinite life", "Show damage", "Show inputs",
-                                     "Auto-mash (Big Bang)", "Revival (Athena)"};
+                                     "Auto-mash (Big Bang)", "Revival (Athena)", "Big Bang Counter"};
 static volatile int opt[NOPT];
 static volatile int menu_open, menu_sel;
 
@@ -94,7 +95,7 @@ static void init(void) {
     if (done) return;
     done = 1;
     opt[OPT_IDLE] = opt[OPT_LIFE] = opt[OPT_DAMAGE] = opt[OPT_INPUTS] = 1;   /* once training is turned on */
-    opt[OPT_REVIVAL] = 1;                                                     /* as the game */
+    opt[OPT_REVIVAL] = opt[OPT_COUNTER] = 1;                                  /* as the game */
     const char *e = getenv("SSTHEH_TRAINING");
     if (e) {
         for (int i = 0; i < OPT_MASH; i++) opt[i] = atoi(e) != 0;
@@ -110,6 +111,13 @@ static void init(void) {
     }
     if ((e = getenv("SSTHEH_AUTOMASH"))) opt[OPT_MASH] = atoi(e) != 0;
     if ((e = getenv("SSTHEH_REVIVAL"))) opt[OPT_REVIVAL] = atoi(e) != 0;
+    if ((e = getenv("SSTHEH_BBCOUNTER"))) opt[OPT_COUNTER] = atoi(e) != 0;
+}
+
+/* a Big Bang Attack may be countered (bigbang.c) */
+int training_counter(void) {
+    init();
+    return opt[OPT_COUNTER];
 }
 
 /* a fighter whose life runs out may stand up again (bigbang.c) */

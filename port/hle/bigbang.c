@@ -8,6 +8,13 @@
  * 0x0031E5F0); then it is a knock-out as the game does it. The byte is set here before the check
  * for a fighter at life <= 0.
  *
+ * Big Bang Counter off (SSTHEH_BBCOUNTER=0): a Big Bang Attack can't be countered, so it never turns
+ * into a clash. The counter is a press of the button shown on the screen at the right moment: the
+ * Big Bang event (0x001BB570) asks the defender's controller +0xC0 query from 0x001BC2BC (returning
+ * to 0x001BC2C4): 0 none, 1 the right button, 2 a wrong one. Asked from there, the player's query finds
+ * no face button pressed, and the computer's (0x00315070, replaced here: a draw of 100, under 6 a wrong
+ * button, under 68 the right one) answers none.
+ *
  * Auto-mash: the button mashing done by the port (SSTHEH_AUTOMASH=1).
  *
  * In a Big Bang Counter both fighters mash ✕ ○ □ △ (any of them) to win the clash, and a fighter
@@ -31,14 +38,33 @@
 
 int training_automash(void);                  /* training.c: the menu's options */
 int training_revival(void);
+int training_counter(void);
 u32 kernel_vblank_count(void);
 
 #define EVENTS_LO 0x001B9F00u
 #define EVENTS_HI 0x001C0400u
 #define COUNTER_RA 0x001BC2C4u
 
+/* the pad manager's pressed-this-frame word for a player controller's port, or 0 */
+static u32 pressed_word(Ctx *c, u32 ctl) {
+    s16 port = (s16)rd16(c, ctl + 0x18);
+    if (port < 0 || port > 1) return 0;
+    u8 regs[offsetof(Ctx, thread)];
+    memcpy(regs, c, sizeof regs);
+    SET32(31, 0);
+    rt_call(c, 0x00138DE0);
+    u32 word = RW(2) + (u32)port * 0xE4 + 0x44;
+    memcpy(c, regs, sizeof regs);
+    return word;
+}
+
 static void mash(Ctx *c) {
     u32 ra = RW(31);
+    if (ra == COUNTER_RA && !training_counter()) {          /* no counter: the face buttons unseen */
+        u32 word = pressed_word(c, RW(4));
+        if (word) wr16(c, word, rd16(c, word) & 0x0FFF);
+        return;
+    }
     if (ra < EVENTS_LO || ra >= EVENTS_HI || ra == COUNTER_RA || !training_automash()) return;
     u32 ctl = RW(4);
     s16 port = (s16)rd16(c, ctl + 0x18);
@@ -56,6 +82,21 @@ static void mash(Ctx *c) {
     u32 word = RW(2) + (u32)port * 0xE4 + 0x44;
     memcpy(c, regs, sizeof regs);
     wr16(c, word, rd16(c, word) | face[turn[port] & 3]);
+}
+
+/* 0x00315070 (replaced): the computer's "which face button" query, a draw */
+void hle_com_face(Ctx *c) {
+    u32 ra = RW(31);
+    if (ra == COUNTER_RA) {
+        static u32 last;
+        u32 vb = kernel_vblank_count();
+        if (vb - last > 60) rt_log("bbc", "the computer may counter a Big Bang Attack%s", training_counter() ? "" : ": no (Big Bang Counter off)");
+        last = vb;
+        if (!training_counter()) { SET64(2, 0); return; }
+    }
+    rt_call(c, 0x00194460);
+    u32 r = RW(2) % 100;
+    SET64(2, r < 6 ? 2 : r < 68 ? 1 : 0);
 }
 
 void hle_mash_any(Ctx *c) { mash(c); }        /* 0x002FF9D0 */

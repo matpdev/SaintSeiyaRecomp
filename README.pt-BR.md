@@ -121,7 +121,8 @@ O mesmo menu tem **Auto-mash (Big Bang)**, para toda luta (treino ou não, hist�
 Counter e quando a vida de um lutador acaba (Atena chamando para levantar), o port aperta ✕ ○ □ △ pelos jogadores,
 cerca de 20 vezes por segundo; o toque no tempo do contra-ataque (o botão mostrado na tela) continua seu.
 **Revival (Athena)** desligado: o lutador cuja vida acaba é nocauteado, sem a cena de Atena chamando para levantar
-(qualquer lutador, história incluída).
+(qualquer lutador, história incluída). **Big Bang Counter** desligado: um Big Bang Attack não pode ser
+contra-atacado (nem o computador nem você apertam o botão mostrado), então nunca vira disputa.
 
 ### Opções
 
@@ -133,6 +134,7 @@ indicados, sem janela). Variáveis de ambiente:
 | `SSTHEH_VSYNC=1` | começa com vsync (padrão: sem limite de fps) |
 | `SSTHEH_WINDOW=LxA` | tamanho da janela ao abrir, ex. `2560x1440`, ou `full` (padrão: 1920x1080, ou o último escolhido com F1) |
 | `SSTHEH_WIDESCREEN=0` | imagem 4:3 original (padrão: 16:9, o 3D com visão mais larga e menus e HUD nas proporções 4:3; artes 4:3 de tela cheia ganham laterais desfocadas; nas lutas, as barras de vida vão até as bordas) |
+| `SSTHEH_WIDE_2D=0` | no widescreen, cenas da história cujas camadas 2D são maiores que a tela cortadas no 4:3 com laterais desfocadas, como antes (padrão: a arte real das camadas nas laterais) |
 | `SSTHEH_WIDE_SELECT=0` | no widescreen, as faixas de retratos da seleção de personagens como no disco (padrão: mais longas, até as bordas da tela) |
 | `SSTHEH_WIDE_HUD=0` | no widescreen, o HUD da luta (barras de vida, retratos, medidores de cosmo) no 4:3 do meio em vez de nas bordas |
 | `SSTHEH_SHOT_PRESENT=LxA` | o `--shot` salva a imagem como uma janela desse tamanho mostra (widescreen, laterais) em vez do quadro do PS2 |
@@ -147,6 +149,7 @@ indicados, sem janela). Variáveis de ambiente:
 | `SSTHEH_PAD2=1` | um controle na porta 2 mesmo sem segundo gamepad (modos de dois jogadores) |
 | `SSTHEH_AUTOMASH=1` / `=0` | mash automático nos eventos de Big Bang ligado / desligado, só nesta execução (padrão: a escolha do menu F5) |
 | `SSTHEH_REVIVAL=0` / `=1` | ressurreições (Atena) desligadas / ligadas, só nesta execução (padrão: a escolha do menu F5, ligadas) |
+| `SSTHEH_BBCOUNTER=0` / `=1` | Big Bang Counter desligado / ligado, só nesta execução (padrão: a escolha do menu F5, ligado) |
 | `SSTHEH_TRAINING=1` / `=0` | modo de treino com todas as opções ligadas / desligadas, só nesta execução (padrão: as escolhas do menu F5) |
 | `SSTHEH_UNLOCK_ALL=1` | cheat: libera tudo (modos, personagens, cenários, extras); salvando, fica no save |
 | `SSTHEH_MEMCARD=pasta` | onde fica o memory card (padrão `~/.local/share/sstheh/memcard1`) |
