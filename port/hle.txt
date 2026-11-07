@@ -18,6 +18,7 @@
 0x002A78D0 hle_frame_lines      # scanlines this frame has used, for the time-sliced loaders: see port/hle/frame.c
 0x002BFA80 hle_video_mode       # sets the video mode (D_0050022C): 1 (NTSC, 60 Hz) instead of the region's 2 (PAL): see port/hle/frame.c
 0x002C3740 hle_movie_step       # the opening video's scene step: played with FFmpeg instead of Sofdec + the IPU: see port/hle/movie.c
+0x001798C0 hle_csel_portraits      # character select: the portraits along the strips, more of them in widescreen: see port/hle/charselect.c
 0x00138B20 hle_set_frame_wait   # scenes asking for a frame per two vertical blanks run at the full rate: see port/hle/frame.c
 # libmc2: the worker's synchronous command functions, on a folder (see port/hle/memcard.c)
 0x00132320 hle_mc2_getinfo
@@ -39,3 +40,10 @@
 0x002F9140 hle_training_battle before     # the battle's step (battle): training mode's frame, see port/hle/training.c
 0x0031E5F0 hle_training_damage before     # a hit's damage (life block, damage): its amount, no knock-out in training
 0x002FF490 hle_training_controller before # controllers' common step: the computer's decision cleared for an idle opponent
+0x00100530 hle_csel_alloc before          # malloc: the character select's elements, more of them, see port/hle/charselect.c
+0x00102580 hle_csel_array before          # new[]: the same, constructed by the game
+0x00179D80 hle_csel_borders_init before   # character select: border pieces' set-up (the new ones too)
+0x00179BF0 hle_csel_borders_place before  # character select: border pieces' places
+0x0017A1E0 hle_csel_lists before          # character select: elements into the draw lists
+0x001419B0 hle_csel_closing before        # in a draw list?: from the closing character select, the new pieces taken out
+0x0017A030 hle_csel_show before           # character select: everything shown or hidden
