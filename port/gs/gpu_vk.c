@@ -375,6 +375,18 @@ static int frame_wide_3d(const GpuFrame *f) {
 
 static int kept_43(const GpuDraw *d, int wide_3d) { return d->flat2d && !(wide_3d && d->fullw); }
 
+/* A 2D picture covering the whole 16:9 screen (a story scene's layer zoomed or panned past the 4:3
+   screen): the frame's 2D is not cut at the 4:3 edges, so the sides show the layers' real art instead
+   of the blurred picture (present_into). SSTHEH_WIDE_2D=0: cut as before. */
+static int frame_wide_2d(const GpuFrame *f) {
+    static int on = -1;
+    if (on < 0) on = !(getenv("SSTHEH_WIDE_2D") && !atoi(getenv("SSTHEH_WIDE_2D")));
+    if (!on) return 0;
+    for (u32 i = 0; i < f->ndraws; i++)
+        if (f->draws[i].covers) return 1;
+    return 0;
+}
+
 /* The top of a fight's HUD (portraits, names, life bars, the timer between them) is made of pieces
    that fit into one another, so it is moved point by point: up to 0.45 of the half width from the
    edge (the portrait, the name) anchored to the screen's edge, the last 0.11 before the middle (the
@@ -596,7 +608,7 @@ void gpu_render(GpuFrame *f, const GpuVertex *verts) {
     float last_fix = -1.0f;
     DrawUniforms last_u;
     int have_u = 0;
-    int wide_3d = frame_wide_3d(f);
+    int wide_3d = frame_wide_3d(f), wide_2d = frame_wide_2d(f);
     u32 drawn[MAX_RT];                  /* frame buffers drawn in this frame, and whether at the sides */
     int drawn_sides[MAX_RT], ndrawn = 0;
     for (u32 i = 0; i < f->ndraws; i++) {
@@ -606,7 +618,7 @@ void gpu_render(GpuFrame *f, const GpuVertex *verts) {
             int k = 0;
             while (k < ndrawn && drawn[k] != d->fbp) k++;
             if (k == ndrawn && ndrawn < MAX_RT) { drawn[k] = d->fbp; drawn_sides[k] = 0; ndrawn++; }
-            if (k < ndrawn) drawn_sides[k] |= d->sides;
+            if (k < ndrawn) drawn_sides[k] |= d->sides || (wide_2d && d->covers);
         }
         SDL_GPUTexture *depth = target(depths, &ndepths, d->zbp, 1);
         /* the texture: decoded, a render target, or nothing */
@@ -662,7 +674,7 @@ void gpu_render(GpuFrame *f, const GpuVertex *verts) {
         if (pipe != last_pipe) { SDL_BindGPUGraphicsPipeline(rp, pipe); last_pipe = pipe; }
         SDL_Rect sc = {(int)d->scissor[0] * scale, (int)d->scissor[2] * scale,
                        (int)(d->scissor[1] - d->scissor[0] + 1) * scale, (int)(d->scissor[3] - d->scissor[2] + 1) * scale};
-        if (kept_43(d, wide_3d) && widescreen_on() && !anchored(d, wide_3d)) {     /* 2D kept 3/4 as wide: what was off the 4:3 screen stays off */
+        if (kept_43(d, wide_3d) && widescreen_on() && !anchored(d, wide_3d) && !wide_2d) {     /* 2D kept 3/4 as wide: what was off the 4:3 screen stays off */
             float c = (float)(d->fbw * 32);
             int x0 = (int)((c + ((float)d->scissor[0] - c) * 0.75f) * scale);
             int x1 = (int)((c + ((float)d->scissor[1] + 1 - c) * 0.75f) * scale);

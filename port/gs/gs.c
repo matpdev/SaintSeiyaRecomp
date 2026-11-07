@@ -964,7 +964,8 @@ static void put_prim(int type, const Vertex *v, u32 zs, int gouraud, int fst) {
    whole width that is a band (up to ~1/3 of the height) or of one colour (a fade, a flash) is kept
    apart: over 3D that reaches the sides it covers them too (gpu_vk.c); a picture across the width
    (an illustration) keeps its shape. 2D drawn during a fight (its HUD) is marked: in widescreen
-   each half goes to its side of the screen (gpu_vk.c). From the vertices since `first`. */
+   each half goes to its side of the screen (gpu_vk.c). So is a 2D picture covering the whole 16:9
+   screen (its layer drawn past the 4:3 one). From the vertices since `first`. */
 static void classify(GpuDraw *d, int type, u32 first) {
     float x0 = 1e9f, x1 = -1e9f;
     for (u32 i = first; i < rec->nverts; i++) {
@@ -988,6 +989,17 @@ static void classify(GpuDraw *d, int type, u32 first) {
         }
         float fh = (float)(d->scissor[3] - d->scissor[2] + 1);
         d->fullw = (y1 - y0) <= fh * 0.35f || !d->textured || (d->tex > 0 && tex_ents[d->tex].plain);
+    }
+    /* a 2D picture larger than the 16:9 screen (a story scene's zoomed or panned layer): the game
+       drew it past the 4:3 screen, so the sides have its real art (gpu_vk.c) */
+    d->covers = 0;
+    if (d->flat2d && d->textured && x0 <= -(float)fw / 6.0f && x1 >= (float)fw * 7.0f / 6.0f) {
+        float y0 = 1e9f, y1 = -1e9f;
+        for (u32 i = first; i < rec->nverts; i++) {
+            if (rec->verts[i].y < y0) y0 = rec->verts[i].y;
+            if (rec->verts[i].y > y1) y1 = rec->verts[i].y;
+        }
+        d->covers = y0 <= (float)d->scissor[2] + 0.5f && y1 >= (float)d->scissor[3] + 0.5f;
     }
 }
 

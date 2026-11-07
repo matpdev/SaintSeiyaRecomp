@@ -36,6 +36,7 @@ typedef struct {
     u32 sides;                  /* draws a picture (not 2D, a clear or a post effect) at the 16:9 sides */
     u32 fullw;                  /* 2D across the frame's whole width (a band, a fade, a flash) */
     u32 fight;                  /* 2D drawn during a fight (the HUD): anchored to the side it is on */
+    u32 covers;                 /* 2D picture covering the whole 16:9 screen: the sides show its art */
     u32 first, count;           /* vertices */
 } GpuDraw;
 
