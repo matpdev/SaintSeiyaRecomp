@@ -90,6 +90,15 @@ On the first run the game asks for the language and warns that there is no save 
 Options → Save/Load (answer "Yes" to create the save). The memory card in slot 1 is the folder
 `~/.local/share/sstheh/memcard1`: the save goes to `BESLES-54162GX/` and is loaded by itself when the game starts.
 
+### The release's setup
+
+`tools/setup/` is the setup of the prebuilt release (Qt 6): it checks the player's disc image (the executable must be
+the one the port was translated from; the whole image is compared with the Redump dump only to tell), copies it
+into `disc/` next to the game, downloads the font, keeps the widescreen choice, can make a shortcut, and starts
+the game. `SaintSeiyaDecomp-setup --install <image.iso> [--no-font] [--no-shortcut] [--4-3]` does it without a
+window. Build: `cmake -S tools/setup -B build/setup && cmake --build build/setup`. The game finds `disc/` in the
+folder it is run from, else next to its executable (or one folder up).
+
 ### Controls
 
 | Key | PS2 button |

@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "r5900.h"
 #include "runtime.h"
@@ -36,8 +37,30 @@ static void *game_main(void *arg) {
     return NULL;
 }
 
+/* disc/<name> where the game is: the folder it is run from, else next to the executable (a release:
+ * the setup puts disc/ there), else one folder up (build/sstheh in the repository) */
+static const char *disc_file(const char *name) {
+    static char paths[2][1100];
+    static int k;
+    char *out = paths[k++ & 1], exe[1024];
+    snprintf(out, 1100, "disc/%s", name);
+    if (access(out, R_OK) == 0) return out;
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+    if (n <= 0) return out;
+    exe[n] = 0;
+    char *slash = strrchr(exe, '/');
+    if (!slash) return out;
+    *slash = 0;
+    snprintf(out, 1100, "%s/disc/%s", exe, name);
+    if (access(out, R_OK) == 0) return out;
+    snprintf(out, 1100, "%s/../disc/%s", exe, name);
+    if (access(out, R_OK) == 0) return out;
+    snprintf(out, 1100, "disc/%s", name);
+    return out;
+}
+
 int main(int argc, char **argv) {
-    const char *elf = "disc/SLES_541.62", *iso = "disc/game.iso";
+    const char *elf = disc_file("SLES_541.62"), *iso = disc_file("game.iso");
     int shots[64], nshots = 0, compile_vu = 0, warm = 30;
     const char *replay = NULL;
     const char *gen_vu = NULL;          /* the build: the game's VU1 programs written as C (port/gs/vu_jit.c) */

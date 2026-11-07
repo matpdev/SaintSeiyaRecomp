@@ -88,6 +88,15 @@ Na primeira execução o jogo pede o idioma e avisa que não há save no memory 
 (responda "Yes" para criar o save). O memory card do slot 1 é a pasta `~/.local/share/sstheh/memcard1`: o save fica
 em `BESLES-54162GX/` e é carregado sozinho quando o jogo abre.
 
+### O instalador do release
+
+`tools/setup/` é o instalador do release pré-compilado (Qt 6): confere a imagem do disco do jogador (o executável
+tem de ser exatamente aquele de que o port foi traduzido; a imagem inteira é comparada com o dump do Redump só para
+informar), copia-a para `disc/` ao lado do jogo, baixa a fonte, guarda a escolha do widescreen, pode criar um atalho
+e abre o jogo. `SaintSeiyaDecomp-setup --install <imagem.iso> [--no-font] [--no-shortcut] [--4-3]` faz tudo sem
+janela. Compilar: `cmake -S tools/setup -B build/setup && cmake --build build/setup`. O jogo procura `disc/` na pasta
+de onde é aberto, senão ao lado do executável (ou uma pasta acima).
+
 ### Controles
 
 | Tecla | Botão do PS2 |
