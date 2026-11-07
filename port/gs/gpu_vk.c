@@ -394,7 +394,8 @@ static float hud_top_x(float x, float c) {
    (22% of the height) goes through hud_top_x; in the bottom one (from 86%) each triangle wholly in
    the left half of the frame goes to the screen's left edge and each wholly in the right half to its
    right edge (cosmo gauges), what crosses or touches the middle staying there; the rest (the pause
-   menu, messages, combo counts) stays in the middle 4:3. SSTHEH_WIDE_HUD=0: the whole HUD in the
+   menu, messages, combo counts) stays in the middle 4:3, and what of it was wholly off the 4:3
+   screen stays off (not clipped at the 4:3 edges any more, it would show at the sides). SSTHEH_WIDE_HUD=0: the whole HUD in the
    middle 4:3, as before. */
 static int anchored(const GpuDraw *d, int wide_3d) {
     static int on = -1;
@@ -439,6 +440,10 @@ static void upload_verts(SDL_GPUCommandBuffer *cmd, GpuFrame *f, const GpuVertex
                         float off = 0.0f;
                         if (fminf(m[k].y, fminf(m[k + 1].y, m[k + 2].y)) >= bottom)    /* touching the middle: a centred piece's half */
                             off = hi < c - 16.0f ? -0.25f * c : lo > c + 16.0f ? 0.25f * c : 0.0f;
+                        else if (hi <= 0.0f || lo >= 2.0f * c) {      /* parked off the 4:3 screen (combo counts): stays off */
+                            for (u32 j = k; j < k + 3; j++) m[j].x = -4.0f * c;
+                            continue;
+                        }
                         for (u32 j = k; j < k + 3; j++) m[j].x = c + (m[j].x - c) * 0.75f + off;
                     }
                     continue;
