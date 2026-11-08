@@ -21,15 +21,20 @@ your ISO ──tools/disc.py──► disc/SLES_541.62 (checked by its SHA-1)
                             │
                 splat (config/sles_541.62.yaml) ──► asm/*.s (one function per glabel)
                             │
-             tools/recomp/recomp.py ──► build/recomp/rc_*.c + functab.c   (every function as C)
+             tools/recomp/recomp.py ──► generated/recomp/rc_*.c + functab.c   (every function as C)
                             │
-        sstheh --gen-vu ──► build/vu/*.c   (the 189 VU1 microprograms as C, see port/gs/vu_jit.c)
+        sstheh --gen-vu ──► generated/vu/*.c   (the 189 VU1 microprograms as C, see port/gs/vu_jit.c)
                             │
                   gcc + port/**/*.c ──► build/sstheh
 ```
 
 `build.sh` runs all of it (`configure.py` writes the ninja file). The game's data (models, textures,
 sounds) is never extracted: the program reads the ISO (`disc/game.iso`) while it runs.
+
+The translated C is kept in git (`generated/`): it is code only, the executable's data is loaded from the
+player's own `SLES_541.62` when the game starts. So the port builds without a disc (the GitHub CI makes the
+release packages that way, `tools/release.sh`); with one, `configure.py` makes `generated/` again whenever the
+translator changes, and the change is committed like any other. The output is the same on every machine.
 
 Every guest function becomes `void F_XXXXXXXX(Ctx *c)`. `Ctx` holds the EE's registers; `RW(n)` is
 register n's low 32 bits, `SET32(n, v)` sets it, `F(n)` is a float register, `rd32(c, addr)` /

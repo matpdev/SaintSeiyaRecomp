@@ -1,10 +1,13 @@
 #!/bin/sh
-# Builds a release zip: the port and its setup, without anything from the game.
+# Builds a release package: the port and its setup, without any data of the game. The GitHub CI runs it
+# on every version (.github/workflows/ci.yml); it works the same here.
 #   tools/release.sh windows    -> dist/SaintSeiyaDecomp-windows-x64.zip
-#   tools/release.sh linux      -> dist/SaintSeiyaDecomp-x86_64.AppImage (built in a Debian 13 container:
-#                                  runs on glibc 2.41 and newer)
-# Needs the Linux build (build/: the translated code, the VU1 programs, the shaders), MinGW-w64, and
-# tools/win/ (tools/win_deps.sh; Qt's llvm-mingw build and its runtime in tools/win/qt, tools/win/qtrt).
+#   tools/release.sh linux      -> dist/SaintSeiyaDecomp-x86_64.AppImage (built on Debian 13: runs on glibc
+#                                  2.41 and newer; in a docker container, or right here with SSTHEH_RELEASE_HERE=1
+#                                  on a Debian 13 system, as the CI does)
+# The port is compiled from generated/ (the game's code translated to C, kept in git) and port/: no disc is
+# needed. Needs the Python environment (.venv with ninja and ninja-syntax), glslc, and for Windows MinGW-w64,
+# 7z and tools/win/ (tools/win_deps.sh).
 set -eu
 cd "$(dirname "$0")/.."
 TARGET=${1:-}
@@ -12,12 +15,17 @@ VERSION=$(git describe --tags --always 2>/dev/null || echo dev)
 ok()   { printf '\033[32m✓\033[0m %s\n' "$*"; }
 fail() { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
+shaders() {     # build/shaders/shaders.h, which both builds include
+    .venv/bin/python configure.py --no-split "$@" >/dev/null
+    .venv/bin/ninja build/shaders/shaders.h >/dev/null
+}
+
 windows() {
     W=tools/win
     QT=$W/qt
-    [ -f build/sstheh ] || fail "build the Linux port first (./build.sh): its generated C is reused"
-    [ -d "$QT/bin" ] && [ -f "$W/qtrt/libc++.dll" ] || fail "tools/win/qt (Qt 6 llvm-mingw) and tools/win/qtrt are missing"
-    .venv/bin/python configure.py --no-split --windows >/dev/null
+    [ -d "$QT/bin" ] && [ -f "$W/qtrt/libc++.dll" ] || fail "tools/win/qt and tools/win/qtrt are missing: run tools/win_deps.sh"
+    [ -f "$W/freetype/lib/libfreetype.a" ] || fail "no FreeType for Windows (the texts would keep the disc's font): run tools/win_deps.sh"
+    shaders --windows
     .venv/bin/ninja -f build-win.ninja >/dev/null
     ok "game built for Windows"
     mkdir -p build-win/setup
@@ -39,17 +47,17 @@ windows() {
     cp "$QT/plugins/styles/qmodernwindowsstyle.dll" "$D/styles/"
     cp "$QT/plugins/tls/qschannelbackend.dll" "$D/tls/"
     cp "$W/qtrt/libc++.dll" "$W/qtrt/libunwind.dll" "$D/"
-    cp /usr/x86_64-w64-mingw32/bin/libwinpthread-1.dll "$D/"
+    for p in /usr/x86_64-w64-mingw32/bin /usr/x86_64-w64-mingw32/lib; do     # Arch, Debian
+        [ -f $p/libwinpthread-1.dll ] && cp $p/libwinpthread-1.dll "$D/" && break
+    done
+    [ -f "$D/libwinpthread-1.dll" ] || fail "libwinpthread-1.dll (MinGW-w64) not found"
 
     L=$D/licenses
     cp LICENSE "$L/SaintSeiyaDecomp-MIT.txt"
     cp licenses/Tenkaichi3Decomp-MIT.txt licenses/OFL-1.1.txt "$L/"
     cp "$W"/SDL3-*/LICENSE.txt "$L/SDL3-zlib.txt"
     cp "$W"/ffmpeg-*-win64-lgpl-shared-*/LICENSE.txt "$L/FFmpeg-LGPL-3.0.txt"
-    cp /usr/share/licenses/qt6-base/LGPL-3.0-only.txt "$L/Qt-LGPL-3.0.txt"
-    cp /usr/share/licenses/qt6-base/GPL-3.0-only.txt "$L/GPL-3.0.txt"
-    cp /usr/share/licenses/llvm-libs/LICENSE "$L/LLVM-libc++-Apache-2.0-with-LLVM-exception.txt"
-    cp /usr/share/licenses/mingw-w64-winpthreads/COPYING.MinGW-w64-runtime.txt "$L/MinGW-w64-runtime.txt"
+    cp licenses/windows/*.txt "$L/"
     cat > "$L/THIRD-PARTY.txt" <<'EOF'
 This release contains, unmodified and dynamically linked:
 - SDL 3 (zlib license): https://libsdl.org — SDL3.dll
@@ -94,20 +102,24 @@ EOF
 }
 
 linux() {
-    [ -f build/sstheh ] || fail "build the Linux port first (./build.sh): its generated C is reused"
-    command -v docker >/dev/null || fail "docker is needed (the AppImage is built in a Debian 13 container)"
-    IMG=saintseiyadecomp-appimage
-    if ! docker image inspect $IMG >/dev/null 2>&1 && ! docker build -q -t $IMG tools/appimage >/dev/null 2>&1; then
-        # docker build can't be given a DNS server (a host resolving through 127.0.0.53 leaves the build
-        # without one): the same image made by hand, with the Dockerfile's commands
-        RUN=$(sed -n '/^RUN /,/[^\\]$/p' tools/appimage/Dockerfile | sed 's/^RUN //; s/\\$//' | tr '\n' ' ')
-        docker rm -f ${IMG}-make >/dev/null 2>&1 || true
-        docker run --dns "${SSTHEH_DOCKER_DNS:-1.1.1.1}" --name ${IMG}-make debian:trixie sh -c "$RUN" >/dev/null
-        docker commit ${IMG}-make $IMG >/dev/null
-        docker rm ${IMG}-make >/dev/null
+    shaders
+    if [ -n "${SSTHEH_RELEASE_HERE:-}" ]; then
+        SRC=$PWD sh tools/appimage/build.sh
+    else
+        command -v docker >/dev/null || fail "docker is needed (the AppImage is built in a Debian 13 container)"
+        IMG=saintseiyadecomp-appimage
+        if ! docker image inspect $IMG >/dev/null 2>&1 && ! docker build -q -t $IMG tools/appimage >/dev/null 2>&1; then
+            # docker build can't be given a DNS server (a host resolving through 127.0.0.53 leaves the build
+            # without one): the same image made by hand, with the Dockerfile's commands
+            RUN=$(sed -n '/^RUN /,/[^\\]$/p' tools/appimage/Dockerfile | sed 's/^RUN //; s/\\$//' | tr '\n' ' ')
+            docker rm -f ${IMG}-make >/dev/null 2>&1 || true
+            docker run --dns "${SSTHEH_DOCKER_DNS:-1.1.1.1}" --name ${IMG}-make debian:trixie sh -c "$RUN" >/dev/null
+            docker commit ${IMG}-make $IMG >/dev/null
+            docker rm ${IMG}-make >/dev/null
+        fi
+        ok "build container ready (Debian 13)"
+        docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -e HOME=/tmp saintseiyadecomp-appimage sh /src/tools/appimage/build.sh
     fi
-    ok "build container ready (Debian 13)"
-    docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -e HOME=/tmp saintseiyadecomp-appimage sh /src/tools/appimage/build.sh
     RT=tools/appimage/runtime-x86_64
     [ -s $RT ] || curl -fsSL -o $RT https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64
     cat $RT dist/app.squashfs > dist/SaintSeiyaDecomp-x86_64.AppImage

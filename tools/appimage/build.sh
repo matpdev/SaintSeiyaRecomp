@@ -1,10 +1,10 @@
 #!/bin/sh
-# Inside the AppImage's build container (tools/appimage/Dockerfile), with the repository at /src:
-# compiles the port from the C the Linux build generated (build/recomp, build/vu, build/shaders) and the
-# setup, and lays out the AppDir with the libraries the two need (not the system's core ones: glibc,
+# Inside the AppImage's build container (tools/appimage/Dockerfile), with the repository at /src (or in
+# the current folder, as the GitHub release job runs it, already on Debian 13): compiles the port from
+# generated/ and build/shaders, and the setup, and lays out the AppDir with the libraries the two need (not the system's core ones: glibc,
 # the graphics drivers, X11/Wayland, the Vulkan loader). tools/release.sh linux runs it.
 set -eu
-cd /src
+cd "${SRC:-/src}"
 B=build-rel
 A=dist/AppDir
 mkdir -p $B/obj
@@ -13,13 +13,13 @@ mkdir -p $B/obj
 python3 - <<'PY'
 import glob, os, subprocess
 def pc(*a): return subprocess.run(["pkg-config", *a], capture_output=True, text=True, check=True).stdout.strip()
-inc = "-Iport/runtime -Iport/kernel -Iport/iop -Iport/gs -Ibuild/recomp -Ibuild/shaders " + pc("--cflags", "sdl3")
+inc = "-Iport/runtime -Iport/kernel -Iport/iop -Iport/gs -Igenerated/recomp -Ibuild/shaders " + pc("--cflags", "sdl3")
 flags = "-g -w -fno-strict-aliasing -ffp-contract=off -march=x86-64-v2"
 ff = pc("--cflags", "libavformat", "libavcodec", "libavutil", "libswscale", "libswresample")
 ft = pc("--cflags", "freetype2")
 libs = pc("--libs", "sdl3", "libavformat", "libavcodec", "libavutil", "libswscale", "libswresample", "freetype2")
-srcs = sorted(glob.glob("build/recomp/rc_*.c")) + ["build/recomp/functab.c"]
-srcs += sorted(glob.glob("port/**/*.c", recursive=True)) + sorted(glob.glob("build/vu/*.c"))
+srcs = sorted(glob.glob("generated/recomp/rc_*.c")) + ["generated/recomp/functab.c"]
+srcs += sorted(glob.glob("port/**/*.c", recursive=True)) + sorted(glob.glob("generated/vu/*.c"))
 with open("build-rel.ninja", "w") as f:
     f.write(f"rule cc\n  command = gcc -c -O1 {flags} {inc} -MMD -MF $out.d $in -o $out\n  depfile = $out.d\n  deps = gcc\n")
     f.write(f"rule cc_fast\n  command = gcc -c -O2 {flags} {inc} $extra -MMD -MF $out.d $in -o $out\n  depfile = $out.d\n  deps = gcc\n")
@@ -27,7 +27,7 @@ with open("build-rel.ninja", "w") as f:
     objs = []
     for s in srcs:
         o = "build-rel/obj/" + s.replace("/", "_")[:-2] + ".o"
-        if s.startswith("build/recomp/"):
+        if s.startswith("generated/recomp/"):
             f.write(f"build {o}: cc {s}\n")
         else:
             extra = "-DSSTHEH_FFMPEG " + ff if s == "port/hle/movie.c" else "-DSSTHEH_FREETYPE " + ft if s == "port/hle/textfont.c" else ""
@@ -35,7 +35,7 @@ with open("build-rel.ninja", "w") as f:
         objs.append(o)
     f.write("build build-rel/sstheh: link " + " ".join(objs) + "\n")
 PY
-ninja -f build-rel.ninja
+ninja -f build-rel.ninja --quiet
 echo "port built"
 
 # ---- the setup

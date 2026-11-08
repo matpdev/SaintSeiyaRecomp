@@ -1,6 +1,6 @@
 #!/bin/sh
 # The text of a GitHub release: what to download, what is needed, and the commits since the release
-# before it. Used by the CI when it tags a version (tools/auto_tag.sh) and by tools/publish.sh.
+# before it. The CI writes it into each release it makes (.github/workflows/ci.yml).
 #   tools/release_notes.sh vX.Y.Z
 set -eu
 TAG=$1

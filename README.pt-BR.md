@@ -9,7 +9,8 @@ Port nativo para PC (Linux e Windows) de **Saint Seiya: The Hades** (PS2, Europa
 recompilação estática, com uma decompilação matching avançando em paralelo. O modelo é o
 [Tenkaichi3Decomp](https://github.com/z3xox/Tenkaichi3Decomp).
 
-Este repositório não contém nada do jogo. Você precisa da sua própria cópia do disco.
+Este repositório não contém dados do jogo (imagem do disco, modelos, texturas, sons): `generated/` tem o código do
+jogo traduzido para C, que lê todo o resto do seu próprio disco. Você precisa da sua própria cópia do disco.
 
 ![Seiya numa luta, em 16:9 com o HUD nas proporções originais](docs/img/widescreen.webp)
 
@@ -42,8 +43,8 @@ Detalhes técnicos (em inglês) em [`docs/roadmap.md`](docs/roadmap.md) e [`docs
 
 ## Jogar (só o port)
 
-Você precisa da **sua própria cópia** do jogo: Saint Seiya: The Hades, **versão europeia (SLES-54162)**. Nada do
-jogo está neste repositório. A tradução brasileira de fãs é outro build (comprimido com SjCRUNCH) e não serve.
+Você precisa da **sua própria cópia** do jogo: Saint Seiya: The Hades, **versão europeia (SLES-54162)**. Nenhum dado
+do jogo está neste repositório. A tradução brasileira de fãs é outro build (comprimido com SjCRUNCH) e não serve.
 
 **Pronto para jogar:** os [releases](https://github.com/matpdev/SaintSeiyaRecomp/releases) têm um zip para Windows e um
 AppImage para Linux. Abra o instalador (`SaintSeiyaDecomp-setup.exe`, ou o AppImage), escolha a sua ISO e jogue:
@@ -56,9 +57,10 @@ nada para compilar. Para compilar você mesmo:
   ele ficam com a fonte do disco)
   - Arch: `sudo pacman -S gcc python ninja shaderc sdl3 vulkan-icd-loader ffmpeg freetype2` (mais o driver da sua placa)
   - Debian/Ubuntu: `sudo apt install gcc python3-venv ninja-build glslc libsdl3-dev libvulkan1 libavformat-dev libavcodec-dev libswscale-dev libswresample-dev libfreetype-dev`
-- os programas de VU1 do jogo são traduzidos para C a partir do executável e ficam dentro do `build/sstheh`
-  (um primeiro executável, `build/sstheh-stage1`, escreve-os em `build/vu/`): para jogar não é preciso
-  compilador. O build serve para qualquer PC x86-64 dos últimos ~12 anos (`x86-64-v2`);
+- o código do jogo é traduzido para C a partir do executável (`tools/recomp/recomp.py` em `generated/recomp/`,
+  os programas de VU1 por um primeiro executável, `build/sstheh-stage1`, em `generated/vu/`) e fica dentro do
+  `build/sstheh`: para jogar não é preciso compilador. Sem o `disc/SLES_541.62`, o port é compilado do
+  `generated/` como está. O build serve para qualquer PC x86-64 dos últimos ~12 anos (`x86-64-v2`);
   `python3 configure.py --march=native` compila só para esta máquina (VU1 uns 4% mais rápida)
 
 ### 2. Compilar e jogar
@@ -116,10 +118,11 @@ Compilado com o SDL 3.2 do Debian, o AppImage não tem pacotes de textura (PNG p
 
 Cada push roda o [CI](.github/workflows/ci.yml) no GitHub: o código do próprio port compilado para Linux e Windows
 (avisos viram erros), o instalador e as ferramentas em Python (`tools/ci_check.sh linux|windows|python` faz o mesmo
-localmente). Um push no `master` que compila ganha a tag da próxima versão (`v0.1.0`, `v0.1.1`...; `#minor` ou
-`#major` na mensagem de um commit sobe esse número) e um release em rascunho. O código do jogo é gerado a partir
-do disco, então os pacotes são feitos numa máquina com o jogo: `tools/publish.sh [--draft]` gera os dois para o
-commit da tag, envia e publica o release (precisa do GitHub CLI logado). Nada do jogo passa pelo GitHub.
+localmente). Um push no `master` que passa ganha a próxima versão (`v0.1.0`, `v0.1.1`...; `#minor` ou `#major` na
+mensagem de um commit sobe esse número) e um release com o zip do Windows e o AppImage, montados no GitHub só a
+partir do repositório (`tools/release.sh windows|linux`, igual aqui). O código do jogo está em `generated/`;
+quando o tradutor muda, compile com o seu disco e faça commit do que mudou lá. Nenhum dado do jogo passa pelo
+GitHub.
 
 ### O instalador do release
 
@@ -236,6 +239,7 @@ depuração: [docs/depuracao.pt-BR.md](docs/depuracao.pt-BR.md).
 | `config/sles_541.62.yaml` | configuração do splat (segmentos, `$gp`) |
 | `config/symbol_addrs.txt` | nomes conhecidos (`nome = 0xENDEREÇO; // type:func`) |
 | `asm/`, `assets/` | gerados pelo splat (ignorados pelo git) |
+| `generated/` | o código do jogo traduzido para C: `recomp/` (o código MIPS, `tools/recomp/recomp.py`), `vu/` (os programas de VU1); refeito a partir do `disc/SLES_541.62` quando ele existe |
 | `src/`, `include/` | código decompilado (C++) |
 | `tools/recomp/` | recompilador estático MIPS → C |
 | `port/runtime/`, `port/kernel/` | CPU, memória, timers, syscalls do kernel |

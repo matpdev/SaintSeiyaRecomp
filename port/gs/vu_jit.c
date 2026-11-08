@@ -50,7 +50,7 @@
 
 typedef int (*ProgFn)(Vu *v);
 
-/* The programs built into the executable (build/vu/vu_builtin.c, sorted by key), weak: the first
+/* The programs built into the executable (generated/vu/vu_builtin.c, sorted by key), weak: the first
  * stage of the build, which writes them, has none. */
 typedef struct { u64 key; ProgFn fn; } VuBuiltin;
 extern const VuBuiltin vu_builtin[] __attribute__((weak));

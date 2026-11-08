@@ -4,7 +4,12 @@
     python3 configure.py && ninja
 
 `ninja` assembles every file, links them with splat's linker script and checks that the
-result is byte-identical to disc/SLES_541.62.
+result is byte-identical to disc/SLES_541.62; `ninja port` builds the PC port (build/sstheh).
+
+The port's translation of the game's code is kept in generated/ (the MIPS code as C, the VU1
+programs as C: code only, the game's data is read from the player's disc when the game starts).
+With disc/SLES_541.62 it is made again from the executable whenever the translator changes; without
+it (the GitHub CI, a checkout with no disc) the port is built from generated/ as it is.
 """
 import argparse
 import glob
@@ -18,6 +23,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 BINUTILS = "tools/binutils/bin/mips64r5900el-ps2-elf-"
 YAML = "config/sles_541.62.yaml"
 TARGET = "disc/SLES_541.62"
+GEN = "generated"      # the translated code, in git: generated/recomp (tools/recomp/recomp.py), generated/vu
 OUT = "build/SLES_541.62"
 
 RC_FILES = 35          # number of rc_NNN.c files tools/recomp/recomp.py writes (13855 functions / 400)
@@ -36,13 +42,14 @@ def main():
     args = ap.parse_args()
     os.chdir(ROOT)
 
-    if not os.path.exists(TARGET):
-        sys.exit(f"{TARGET} is missing: copy SLES_541.62 from your own disc (see disc/README.md)")
-    if not args.no_split:
+    have_elf = os.path.exists(TARGET)
+    if not have_elf:
+        print(f"no {TARGET}: the port is built from {GEN}/ as it is (no split, no translation)")
+    elif not args.no_split:
         subprocess.run([sys.executable, "-m", "splat", "split", YAML], check=True)
 
-    sources = sorted(glob.glob("asm/**/*.s", recursive=True))
-    bins = sorted(b for b in glob.glob("assets/**/*.bin", recursive=True) if not b.endswith(".databin.bin"))
+    sources = sorted(glob.glob("asm/**/*.s", recursive=True)) if have_elf else []
+    bins = sorted(b for b in glob.glob("assets/**/*.bin", recursive=True) if not b.endswith(".databin.bin")) if have_elf else []
 
     with open("build.ninja", "w") as f:
         n = ninja_syntax.Writer(f, width=120)
@@ -67,16 +74,17 @@ def main():
             n.build(o, "bin", b)
             objs.append(o)
 
-        n.build(f"{OUT}.elf", "ld", objs, implicit=[f"{OUT}.ld"])
-        n.build(f"{OUT}.rom", "objcopy", f"{OUT}.elf")
-        n.build(f"{OUT}.ok", "check", f"{OUT}.rom")
-        n.default(f"{OUT}.ok")
+        if have_elf:
+            n.build(f"{OUT}.elf", "ld", objs, implicit=[f"{OUT}.ld"])
+            n.build(f"{OUT}.rom", "objcopy", f"{OUT}.elf")
+            n.build(f"{OUT}.ok", "check", f"{OUT}.rom")
+            n.default(f"{OUT}.ok")
 
         # ---- native port: recompiled code + runtime (see docs/roadmap.md)
         code = [s for s in sources if not s.startswith("asm/data/")]
-        n.rule("recomp", f"{sys.executable} -I tools/recomp/recomp.py {TARGET} build/recomp $in",
+        n.rule("recomp", f"{sys.executable} -I tools/recomp/recomp.py {TARGET} {GEN}/recomp $in",
                description="recomp", restat=True)
-        inc = "-Iport/runtime -Iport/kernel -Iport/iop -Iport/gs -Ibuild/recomp -Ibuild/shaders"
+        inc = f"-Iport/runtime -Iport/kernel -Iport/iop -Iport/gs -I{GEN}/recomp -Ibuild/shaders"
         # the translated code builds fast at -O1, without warnings (it is generated); the runtime and the
         # renderer get -O2 and the compiler's warnings (unused parameters aside: hooks take Ctx *c as given)
         warn = "-Wall -Wextra -Wno-unused-parameter"
@@ -111,13 +119,14 @@ def main():
         n.rule("cc_freetype", f"gcc -c -O2 -g {warn} -fno-strict-aliasing -ffp-contract=off -march={args.march} {inc} {ft_cflags} -MMD -MF $out.d $in -o $out",
                depfile="$out.d", deps="gcc", description="cc $in")
         n.rule("link", f"gcc -rdynamic $in -o $out -lm -lpthread -lSDL3 -ldl {ff_libs or ''} {ft_libs or ''}", description="link $out")
-        rc_files = [f"build/recomp/rc_{k:03d}.c" for k in range(RC_FILES)] + ["build/recomp/functab.c"]
-        n.build(rc_files, "recomp", code, implicit=["tools/recomp/recomp.py", "port/hle.txt"])
+        rc_files = [f"{GEN}/recomp/rc_{k:03d}.c" for k in range(RC_FILES)] + [f"{GEN}/recomp/functab.c"]
+        if have_elf:
+            n.build(rc_files, "recomp", code, implicit=["tools/recomp/recomp.py", "port/hle.txt"])
         port_srcs = sorted(glob.glob("port/**/*.c", recursive=True))
         port_objs = []
         for src in rc_files + port_srcs:
             o = "build/port/" + src.replace("/", "_")[:-2] + ".o"
-            rule = ("cc" if src.startswith("build/recomp/") else "cc_ffmpeg" if src == "port/hle/movie.c"
+            rule = ("cc" if src.startswith(f"{GEN}/") else "cc_ffmpeg" if src == "port/hle/movie.c"
                     else "cc_freetype" if src == "port/hle/textfont.c" else "cc_fast")
             n.build(o, rule, src,
                     order_only=rc_files + ["build/shaders/shaders.h"])
@@ -133,10 +142,12 @@ def main():
         n.build("build/shaders/shaders.h", "spvhdr", spvs, implicit=["tools/spv2h.py"])
         # the game's VU1 programs built in (port/gs/vu_jit.c): a first executable writes them as C from
         # the game's executable, the second has them linked in (no compiler needed to play)
-        n.build("build/sstheh-stage1", "link", port_objs)
-        n.rule("gen_vu", "build/sstheh-stage1 -q --gen-vu build/vu > /dev/null", description="VU1 programs as C")
-        vu_c = [f"build/vu/vu_{k:02d}.c" for k in range(16)] + ["build/vu/vu_builtin.c"]
-        n.build(vu_c, "gen_vu", implicit=["build/sstheh-stage1", "disc/SLES_541.62"])
+        vu_c = [f"{GEN}/vu/vu_{k:02d}.c" for k in range(16)] + [f"{GEN}/vu/vu_builtin.c"]
+        if have_elf:
+            n.build("build/sstheh-stage1", "link", port_objs)
+            n.rule("gen_vu", f"build/sstheh-stage1 -q --gen-vu {GEN}/vu > /dev/null", description="VU1 programs as C",
+                   restat=True)
+            n.build(vu_c, "gen_vu", implicit=["build/sstheh-stage1", TARGET])
         vu_objs = []
         for src in vu_c:
             o = "build/port/" + src.replace("/", "_")[:-2] + ".o"
@@ -144,14 +155,16 @@ def main():
             vu_objs.append(o)
         n.build("build/sstheh", "link", port_objs + vu_objs)
         n.build("port", "phony", "build/sstheh")
+        if not have_elf:
+            n.default("port")
     print(f"build.ninja written: {len(sources)} asm files, {len(bins)} binary files")
     if args.windows:
         windows(args)
 
 
 def windows(args):
-    """build-win.ninja: build-win/sstheh.exe with MinGW-w64, from the C the Linux build generated (build/recomp,
-    build/vu, build/shaders) and port/; SDL3 and FFmpeg from tools/win/ (DLLs copied next to the exe)."""
+    """build-win.ninja: build-win/sstheh.exe with MinGW-w64, from generated/, build/shaders (ninja
+    build/shaders/shaders.h first) and port/; SDL3, FFmpeg, FreeType from tools/win/ (DLLs copied next to the exe)."""
     sdl = glob.glob("tools/win/SDL3-*/x86_64-w64-mingw32")
     ff = glob.glob("tools/win/ffmpeg-*-win64-lgpl-shared-*")
     ft = "tools/win/freetype"
@@ -160,7 +173,7 @@ def windows(args):
     sdl = sdl[0]
     ff = ff[0] if ff else None
     has_ft = os.path.exists(f"{ft}/lib/libfreetype.a")
-    inc = (f"-Iport/runtime -Iport/kernel -Iport/iop -Iport/gs -Ibuild/recomp -Ibuild/shaders -I{sdl}/include"
+    inc = (f"-Iport/runtime -Iport/kernel -Iport/iop -Iport/gs -I{GEN}/recomp -Ibuild/shaders -I{sdl}/include"
            + (f" -I{ff}/include" if ff else "") + (f" -I{ft}/include/freetype2" if has_ft else ""))
     cc = "x86_64-w64-mingw32-gcc"
     flags = f"-g -w -fno-strict-aliasing -ffp-contract=off -march={args.march} -D_FILE_OFFSET_BITS=64"   # off_t: 64 bits (the 4 GB image)
@@ -180,8 +193,8 @@ def windows(args):
                description="link $out")
         n.rule("copy", "cp $in $out", description="copy $out")
         objs = []
-        srcs = sorted(glob.glob("build/recomp/rc_*.c")) + ["build/recomp/functab.c"]
-        srcs += sorted(glob.glob("port/**/*.c", recursive=True)) + sorted(glob.glob("build/vu/*.c"))
+        srcs = sorted(glob.glob(f"{GEN}/recomp/rc_*.c")) + [f"{GEN}/recomp/functab.c"]
+        srcs += sorted(glob.glob("port/**/*.c", recursive=True)) + sorted(glob.glob(f"{GEN}/vu/*.c"))
         for src in srcs:
             o = "build-win/obj/" + src.replace("/", "_")[:-2] + ".o"
             extra = ""
@@ -189,7 +202,7 @@ def windows(args):
                 extra = "-DSSTHEH_FFMPEG"
             if src == "port/hle/textfont.c" and has_ft:
                 extra = "-DSSTHEH_FREETYPE"
-            if src.startswith("build/recomp/"):
+            if src.startswith(f"{GEN}/recomp/"):
                 n.build(o, "cc", src)
             else:
                 n.build(o, "cc_fast", src, variables={"extra": extra})

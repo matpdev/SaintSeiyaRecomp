@@ -1,5 +1,5 @@
 /*
- * Guest CPU state and the operations the recompiled code (build/recomp/rc_*.c) is written in.
+ * Guest CPU state and the operations the recompiled code (generated/recomp/rc_*.c) is written in.
  *
  * Registers are the Emotion Engine's: 32 GPRs of 128 bits (ordinary instructions use the low 64),
  * HI/LO pairs for the two multiply pipelines, the shift amount register of the MMI funnel shift, the

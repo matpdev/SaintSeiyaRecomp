@@ -3,8 +3,8 @@
 #   tools/ci_check.sh linux     the port's own code compiled with gcc, warnings as errors; the setup (Qt) built
 #   tools/ci_check.sh windows   the port's own code compiled with MinGW-w64 (tools/win_deps.sh first)
 #   tools/ci_check.sh python    the Python tools byte-compiled
-# The game's code (build/recomp, build/vu) is generated from the player's disc, so nothing is linked here:
-# the release packages are made on a machine with the game (tools/release.sh, tools/publish.sh).
+# The game's translated code (generated/) is left to the release jobs, which build everything
+# (tools/release.sh): this is the fast check, with the port's own warnings as errors.
 set -eu
 cd "$(dirname "$0")/.."
 OUT=build-ci

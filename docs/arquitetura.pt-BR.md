@@ -23,15 +23,20 @@ sua ISO ──tools/disc.py──► disc/SLES_541.62 (conferido pelo SHA-1)
                            │
                splat (config/sles_541.62.yaml) ──► asm/*.s (uma função por glabel)
                            │
-            tools/recomp/recomp.py ──► build/recomp/rc_*.c + functab.c   (cada função em C)
+            tools/recomp/recomp.py ──► generated/recomp/rc_*.c + functab.c   (cada função em C)
                            │
-       sstheh --gen-vu ──► build/vu/*.c   (os 189 microprogramas do VU1 em C, ver port/gs/vu_jit.c)
+       sstheh --gen-vu ──► generated/vu/*.c   (os 189 microprogramas do VU1 em C, ver port/gs/vu_jit.c)
                            │
                  gcc + port/**/*.c ──► build/sstheh
 ```
 
 O `build.sh` roda tudo isso (o `configure.py` gera o arquivo do ninja). Os dados do jogo (modelos,
 texturas, sons) nunca são extraídos: o programa lê a ISO (`disc/game.iso`) enquanto roda.
+
+O C traduzido fica no git (`generated/`): é só código, os dados do executável são carregados do
+`SLES_541.62` do próprio jogador quando o jogo abre. Por isso o port compila sem o disco (o CI do GitHub monta
+os pacotes do release assim, `tools/release.sh`); com ele, o `configure.py` refaz o `generated/` sempre que o
+tradutor muda, e a mudança entra num commit como qualquer outra. A saída é a mesma em qualquer máquina.
 
 Cada função do jogo vira `void F_XXXXXXXX(Ctx *c)`. O `Ctx` guarda os registradores do EE; `RW(n)` são os
 32 bits baixos do registrador n, `SET32(n, v)` o altera, `F(n)` é um registrador de ponto flutuante,

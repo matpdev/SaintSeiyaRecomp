@@ -1,9 +1,10 @@
-# What can be built without the game, on every push and pull request (tools/ci_check.sh): the port's
-# own code for Linux and Windows (warnings are errors), the setup, the Python tools. The game's code is
-# generated from the player's disc, so the release packages are made on a machine with the game
-# (tools/publish.sh); nothing from the game ever goes through here.
-# A push to master that builds gets the next version tag and a draft release (tools/auto_tag.sh); the
-# draft is published by tools/publish.sh, with the packages.
+# Every push and pull request: the port's own code compiled for Linux and Windows with warnings as errors,
+# the setup, the Python tools (tools/ci_check.sh).
+#
+# A push to master that passes gets the next version (tools/next_version.sh: v0.1.0, v0.1.1...; #minor or
+# #major in a commit message bumps that number) and a GitHub release with both packages, built here from the
+# repository alone (tools/release.sh): the game's code comes translated to C from generated/, its data is read
+# from the player's own disc when the game starts. No disc and no game data are involved.
 name: CI
 
 on:
@@ -38,10 +39,10 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            git ca-certificates gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 cmake make curl unzip xz-utils \
+            git ca-certificates gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 cmake make curl unzip xz-utils 7zip \
             python3 glslc
       - uses: actions/checkout@v7
-      - name: Downloads cache (SDL3, FFmpeg, FreeType sources)
+      - name: Downloads cache (SDL3, FFmpeg, FreeType, Qt)
         uses: actions/cache@v6
         with:
           path: tools/win/dl
@@ -51,18 +52,111 @@ jobs:
       - name: Port (MinGW-w64)
         run: tools/ci_check.sh windows
 
-  tag:
+  # ---- releases: only a push to master
+  version:
     needs: [linux, windows]
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    concurrency: tag
+    outputs:
+      tag: ${{ steps.next.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Version tag and draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: tools/auto_tag.sh
+      - id: next
+        run: |
+          TAG=$(tools/next_version.sh)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "next version: ${TAG:-none (this commit is tagged already)}"
+
+  package-linux:
+    needs: version
+    if: needs.version.outputs.tag != ''
+    runs-on: ubuntu-latest
+    container: debian:trixie      # the AppImage's system (tools/appimage/Dockerfile): glibc 2.41
+    steps:
+      - name: Tools and libraries
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git ca-certificates curl gcc g++ ninja-build pkg-config python3 python3-venv cmake glslc file patchelf \
+            squashfs-tools libsdl3-dev libavformat-dev libavcodec-dev libswscale-dev libswresample-dev \
+            libfreetype-dev qt6-base-dev qt6-wayland libgl-dev libvulkan-dev
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Version and Python environment
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -c user.name=ci -c user.email=ci@localhost tag -a "${{ needs.version.outputs.tag }}" -m "${{ needs.version.outputs.tag }}"
+          python3 -m venv .venv && .venv/bin/pip install -q ninja ninja-syntax
+      - name: AppImage (tools/release.sh linux)
+        run: SSTHEH_RELEASE_HERE=1 tools/release.sh linux
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux
+          path: dist/SaintSeiyaDecomp-x86_64.AppImage
+          if-no-files-found: error
+
+  package-windows:
+    needs: version
+    if: needs.version.outputs.tag != ''
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git ca-certificates gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 cmake make curl unzip xz-utils 7zip \
+            python3 python3-venv glslc
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Downloads cache (SDL3, FFmpeg, FreeType, Qt)
+        uses: actions/cache@v6
+        with:
+          path: tools/win/dl
+          key: win-deps-${{ hashFiles('tools/win_deps.sh') }}
+      - name: Version, Python environment, Windows libraries
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -c user.name=ci -c user.email=ci@localhost tag -a "${{ needs.version.outputs.tag }}" -m "${{ needs.version.outputs.tag }}"
+          python3 -m venv .venv && .venv/bin/pip install -q ninja ninja-syntax
+          sh tools/win_deps.sh
+      - name: Zip (tools/release.sh windows)
+        run: tools/release.sh windows
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: dist/SaintSeiyaDecomp-windows-x64.zip
+          if-no-files-found: error
+
+  release:
+    needs: [version, package-linux, package-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency: release
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Tag, checksums, release
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG"
+          git push -q origin "$TAG"
+          (cd dist && sha256sum SaintSeiyaDecomp-windows-x64.zip SaintSeiyaDecomp-x86_64.AppImage > SHA256SUMS.txt)
+          tools/release_notes.sh "$TAG" > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" --verify-tag --title "Saint Seiya: The Hades PC port $TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            dist/SaintSeiyaDecomp-windows-x64.zip dist/SaintSeiyaDecomp-x86_64.AppImage dist/SHA256SUMS.txt
