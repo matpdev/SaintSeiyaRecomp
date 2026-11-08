@@ -2,6 +2,8 @@
 
 **English** · [Português](README.pt-BR.md)
 
+[![Listed on PlayPorted](https://playported.com/badge.svg)](https://playported.com/ports/1243-saint-seiya-the-hades/)
+
 A native PC (Linux) port of **Saint Seiya: The Hades** (PS2, Europe, SLES-54162), made by static
 recompilation, with a matching decompilation moving forward alongside it. Modelled on
 [Tenkaichi3Decomp](https://github.com/z3xox/Tenkaichi3Decomp).
