@@ -116,9 +116,10 @@ Compilado com o SDL 3.2 do Debian, o AppImage não tem pacotes de textura (PNG p
 
 Cada push roda o [CI](.github/workflows/ci.yml) no GitHub: o código do próprio port compilado para Linux e Windows
 (avisos viram erros), o instalador e as ferramentas em Python (`tools/ci_check.sh linux|windows|python` faz o mesmo
-localmente). O código do jogo é gerado a partir do disco, então os pacotes do release são feitos numa máquina com
-o jogo: `tools/publish.sh vX.Y.Z [--draft]` gera os dois, cria a tag e o release no GitHub (precisa do GitHub CLI
-logado). Nada do jogo passa pelo GitHub.
+localmente). Um push no `master` que compila ganha a tag da próxima versão (`v0.1.0`, `v0.1.1`...; `#minor` ou
+`#major` na mensagem de um commit sobe esse número) e um release em rascunho. O código do jogo é gerado a partir
+do disco, então os pacotes são feitos numa máquina com o jogo: `tools/publish.sh [--draft]` gera os dois para o
+commit da tag, envia e publica o release (precisa do GitHub CLI logado). Nada do jogo passa pelo GitHub.
 
 ### O instalador do release
 

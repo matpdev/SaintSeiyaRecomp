@@ -117,9 +117,11 @@ SDL 3.2, the AppImage has no texture packs (PNG needs SDL 3.4).
 
 Every push runs [CI](.github/workflows/ci.yml) on GitHub: the port's own code compiled for Linux and Windows
 (warnings are errors), the setup, the Python tools (`tools/ci_check.sh linux|windows|python` does the same
-locally). The game's code is generated from the disc, so the release packages are made on a machine with the
-game: `tools/publish.sh vX.Y.Z [--draft]` builds both, tags the commit and creates the GitHub release (needs the
-GitHub CLI logged in). Nothing from the game goes through GitHub.
+locally). A push to `master` that builds gets the next version tag (`v0.1.0`, `v0.1.1`...; `#minor` or `#major`
+in a commit message bumps that number instead) and a draft release. The game's code is generated from the disc,
+so the packages are made on a machine with the game: `tools/publish.sh [--draft]` builds both for the tagged
+commit, uploads them and publishes the release (needs the GitHub CLI logged in). Nothing from the game goes
+through GitHub.
 
 ### The release's setup
 

@@ -2,10 +2,13 @@
 # own code for Linux and Windows (warnings are errors), the setup, the Python tools. The game's code is
 # generated from the player's disc, so the release packages are made on a machine with the game
 # (tools/publish.sh); nothing from the game ever goes through here.
+# A push to master that builds gets the next version tag and a draft release (tools/auto_tag.sh); the
+# draft is published by tools/publish.sh, with the packages.
 name: CI
 
 on:
   push:
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 
@@ -21,7 +24,7 @@ jobs:
             git ca-certificates gcc g++ ninja-build pkg-config python3 cmake glslc \
             libsdl3-dev libavformat-dev libavcodec-dev libswscale-dev libswresample-dev libfreetype-dev \
             qt6-base-dev libgl-dev libvulkan-dev
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Port (gcc) and setup (Qt)
         run: tools/ci_check.sh linux
       - name: Python tools
@@ -37,9 +40,9 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             git ca-certificates gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 cmake make curl unzip xz-utils \
             python3 glslc
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Downloads cache (SDL3, FFmpeg, FreeType sources)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: tools/win/dl
           key: win-deps-${{ hashFiles('tools/win_deps.sh') }}
@@ -47,3 +50,19 @@ jobs:
         run: sh tools/win_deps.sh
       - name: Port (MinGW-w64)
         run: tools/ci_check.sh windows
+
+  tag:
+    needs: [linux, windows]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency: tag
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Version tag and draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: tools/auto_tag.sh
