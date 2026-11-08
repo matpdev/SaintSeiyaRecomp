@@ -603,8 +603,8 @@ static Rect sampled_rect(const GpuDraw *d, const GpuVertex *v) {
         float u = v[k].s, t = v[k].t;
         if (!d->fst) {
             if (!(v[k].q > 0.0f)) return (Rect){0, 0, RT_SIZE, RT_SIZE};
-            u = u / v[k].q * RT_SIZE;
-            t = t / v[k].q * RT_SIZE;
+            u = u / v[k].q * (float)d->tw;
+            t = t / v[k].q * (float)d->th;
         }
         u0 = fminf(u0, u); u1 = fmaxf(u1, u);
         v0 = fminf(v0, t); v1 = fmaxf(v1, t);
@@ -689,14 +689,14 @@ void gpu_render(GpuFrame *f, const GpuVertex *verts) {
         SDL_GPUTexture *depth = target(depths, &ndepths, d->zbp, 1);
         /* the texture: decoded, a render target, or nothing */
         SDL_GPUTexture *tex = white;
-        float tw = (float)d->tw, th = (float)d->th;
+        float tw = (float)d->tw, th = (float)d->th, ntw = tw, nth = th;    /* texels per S/T of 1; texels across the texture */
         if (d->textured && d->tex >= 0) {
             Tex *t = tex_slot((u32)d->tex);
             if (t->id == (u32)d->tex && t->tex) { tex = t->tex; t->last_used = frame_no; }
         } else if (d->textured && d->tex < -1) {
             u32 src_fbp = (u32)(-2 - d->tex);
             SDL_GPUTexture *src = find_color(src_fbp);
-            tw = th = RT_SIZE;
+            ntw = nth = RT_SIZE;      /* a target is RT_SIZE wide; S/Q still counts in TEX0's size (TW, TH) */
             if (src && src == color) {                 /* reading the target being drawn: a copy of it */
                 Rect need = sampled_rect(d, vs);
                 if (copy_src != src || !rect_inside(need, copy_ok) || rect_meets(need, copy_dirty)) {
@@ -764,7 +764,7 @@ void gpu_render(GpuFrame *f, const GpuVertex *verts) {
         atest_masks(d, &wm, &zw, &st);
         DrawUniforms u = {{(s32)d->textured, (s32)d->tfx, (s32)d->tcc, (s32)d->fst},
                           {st, (s32)d->atest[1], (s32)d->atest[2], (s32)d->atest[3]},
-                          {tw, th, 1.0f / tw, 1.0f / th},
+                          {tw, th, 1.0f / ntw, 1.0f / nth},
                           {d->region[0], d->region[1], d->region[2], d->region[3]}};
         if (!have_u || memcmp(&u, &last_u, sizeof u)) { SDL_PushGPUFragmentUniformData(cmd, 0, &u, sizeof u); last_u = u; have_u = 1; }
         int smp = (d->filter ? 1 : 0) | (d->wrap_u ? 2 : 0) | (d->wrap_v ? 4 : 0);
