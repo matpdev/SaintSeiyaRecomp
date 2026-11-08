@@ -403,7 +403,8 @@ static float hud_top_x(float x, float c) {
 }
 
 /* A fight's HUD in widescreen: kept 4:3 in shape, but taken to the screen's sides. The top band
-   (22% of the height) goes through hud_top_x; in the bottom one (from 86%) each triangle wholly in
+   (22% of the height) goes through hud_top_x; in the bottom one (from 83%: the cosmo gauge's digit
+   starts at 85%) each triangle wholly in
    the left half of the frame goes to the screen's left edge and each wholly in the right half to its
    right edge (cosmo gauges), what crosses or touches the middle staying there; the rest (the pause
    menu, messages, combo counts) stays in the middle 4:3, and what of it was wholly off the 4:3
@@ -442,7 +443,7 @@ static void upload_verts(SDL_GPUCommandBuffer *cmd, GpuFrame *f, const GpuVertex
                 float c = (float)(d->fbw * 32);
                 if (anchored(d, wide_3d)) {
                     float fh = (float)(d->scissor[3] - d->scissor[2] + 1);
-                    float top = (float)d->scissor[2] + fh * 0.22f, bottom = (float)d->scissor[2] + fh * 0.86f;
+                    float top = (float)d->scissor[2] + fh * 0.22f, bottom = (float)d->scissor[2] + fh * 0.83f;
                     for (u32 k = d->first; k < d->first + d->count; k += 3) {
                         float lo = fminf(m[k].x, fminf(m[k + 1].x, m[k + 2].x)), hi = fmaxf(m[k].x, fmaxf(m[k + 1].x, m[k + 2].x));
                         if (fmaxf(m[k].y, fmaxf(m[k + 1].y, m[k + 2].y)) < top) {
@@ -570,6 +571,67 @@ static void rescale(int to) {
                       SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
 }
 
+/* Effects that read the picture they draw on (heat haze, the ring of a special move: often dozens of
+   strips, each sampling around where it draws) need a copy of the target before the draw. Copying all
+   of it each time (RT_SIZE x RT_SIZE at the render scale: 64 MB at 4x) made those effects GPU bound,
+   so only the part the draw samples is copied, and only when it isn't in the copy already or was
+   drawn over since. Rectangles in GS pixels, x1/y1 excluded. */
+typedef struct { int x0, y0, x1, y1; } Rect;
+static u64 rt_copies, rt_copy_px;
+
+static int rect_empty(Rect r) { return r.x1 <= r.x0 || r.y1 <= r.y0; }
+static int rect_inside(Rect a, Rect b) { return a.x0 >= b.x0 && a.y0 >= b.y0 && a.x1 <= b.x1 && a.y1 <= b.y1; }
+static int rect_meets(Rect a, Rect b) {
+    return !rect_empty(a) && !rect_empty(b) && a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+}
+static Rect rect_union(Rect a, Rect b) {
+    if (rect_empty(a)) return b;
+    if (rect_empty(b)) return a;
+    return (Rect){a.x0 < b.x0 ? a.x0 : b.x0, a.y0 < b.y0 ? a.y0 : b.y0, a.x1 > b.x1 ? a.x1 : b.x1, a.y1 > b.y1 ? a.y1 : b.y1};
+}
+static Rect rect_clamp(float x0, float y0, float x1, float y1) {
+    Rect r = {(int)floorf(fmaxf(x0, 0.0f)), (int)floorf(fmaxf(y0, 0.0f)),
+              (int)ceilf(fminf(x1, (float)RT_SIZE)), (int)ceilf(fminf(y1, (float)RT_SIZE))};
+    if (rect_empty(r)) r = (Rect){0, 0, 0, 0};
+    return r;
+}
+
+/* the texels a draw reading a render target may sample (a texel of slack for the filter) */
+static Rect sampled_rect(const GpuDraw *d, const GpuVertex *v) {
+    float u0 = 1e9f, v0 = 1e9f, u1 = -1e9f, v1 = -1e9f;
+    for (u32 k = d->first; k < d->first + d->count; k++) {
+        float u = v[k].s, t = v[k].t;
+        if (!d->fst) {
+            if (!(v[k].q > 0.0f)) return (Rect){0, 0, RT_SIZE, RT_SIZE};
+            u = u / v[k].q * RT_SIZE;
+            t = t / v[k].q * RT_SIZE;
+        }
+        u0 = fminf(u0, u); u1 = fmaxf(u1, u);
+        v0 = fminf(v0, t); v1 = fmaxf(v1, t);
+    }
+    if (d->region[0] >= 0.0f) {                 /* region clamp */
+        u0 = fmaxf(u0, d->region[0]); u1 = fminf(u1, d->region[2] + 1.0f);
+        v0 = fmaxf(v0, d->region[1]); v1 = fminf(v1, d->region[3] + 1.0f);
+        if (u1 < u0) u1 = u0 + 1.0f;
+        if (v1 < v0) v1 = v0 + 1.0f;
+    }
+    Rect r = rect_clamp(u0 - 2.0f, v0 - 2.0f, u1 + 2.0f, v1 + 2.0f);
+    return rect_empty(r) ? (Rect){0, 0, 1, 1} : r;
+}
+
+/* the pixels a draw may write: its vertices within the scissor (2D moved for widescreen: the whole width) */
+static Rect drawn_rect(const GpuDraw *d, const GpuVertex *v, int wide_3d) {
+    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+    for (u32 k = d->first; k < d->first + d->count; k++) {
+        x0 = fminf(x0, v[k].x); x1 = fmaxf(x1, v[k].x);
+        y0 = fminf(y0, v[k].y); y1 = fmaxf(y1, v[k].y);
+    }
+    if (widescreen_on() && kept_43(d, wide_3d)) { x0 = 0.0f; x1 = (float)RT_SIZE; }
+    x0 = fmaxf(x0 - 1.0f, (float)d->scissor[0]); x1 = fminf(x1 + 1.0f, (float)d->scissor[1] + 1.0f);
+    y0 = fmaxf(y0 - 1.0f, (float)d->scissor[2]); y1 = fminf(y1 + 1.0f, (float)d->scissor[3] + 1.0f);
+    return rect_clamp(x0, y0, x1, y1);
+}
+
 void gpu_render(GpuFrame *f, const GpuVertex *verts) {
     if (want_scale && want_scale != scale) rescale(want_scale);
     if (!dev || !f || !f->ndraws) return;
@@ -589,13 +651,17 @@ void gpu_render(GpuFrame *f, const GpuVertex *verts) {
     }
     if (getenv("SSTHEH_GPU_STATS") && frame_no % 50 == 0) {
         u64 live_bytes, live = gpu_tex_stats(&live_bytes);
-        fprintf(stderr, "[gpu] frame %u: %u draws, %u verts; last 50 frames: %llu uploads, %.1f MB; live textures %llu, %.1f MB\n",
+        fprintf(stderr, "[gpu] frame %u: %u draws, %u verts; last 50 frames: %llu uploads, %.1f MB, %llu target copies, %.1f Mpx; live textures %llu, %.1f MB\n",
                frame_no, f->ndraws, f->nverts, (unsigned long long)up_count, up_bytes / 1048576.0,
-               (unsigned long long)live, live_bytes / 1048576.0);
+               (unsigned long long)rt_copies, rt_copy_px / 1e6, (unsigned long long)live, live_bytes / 1048576.0);
         up_bytes = up_count = 0;
+        rt_copies = rt_copy_px = 0;
     }
     SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(dev);
     upload_verts(cmd, f, verts);
+    const GpuVertex *vs = verts ? verts : f->verts;
+    SDL_GPUTexture *copy_src = NULL;    /* what the scratch copy holds: of which target, the part copied, */
+    Rect copy_ok = {0, 0, 0, 0}, copy_dirty = {0, 0, 0, 0};  /* what was drawn there since */
     SDL_GPURenderPass *rp = NULL;
     u32 cur_fbp = ~0u, cur_zbp = ~0u;
     SDL_GPUTexture *cur_color = NULL;
@@ -631,12 +697,21 @@ void gpu_render(GpuFrame *f, const GpuVertex *verts) {
             u32 src_fbp = (u32)(-2 - d->tex);
             SDL_GPUTexture *src = find_color(src_fbp);
             tw = th = RT_SIZE;
-            if (src && src == color) {                 /* reading the target being drawn: copy it first */
-                if (rp) { SDL_EndGPURenderPass(rp); rp = NULL; cur_fbp = ~0u; }
-                SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
-                SDL_GPUTextureLocation a = {src, 0, 0, 0, 0, 0}, b = {scratch, 0, 0, 0, 0, 0};
-                SDL_CopyGPUTextureToTexture(cp, &a, &b, RT_SIZE * scale, RT_SIZE * scale, 1, false);
-                SDL_EndGPUCopyPass(cp);
+            if (src && src == color) {                 /* reading the target being drawn: a copy of it */
+                Rect need = sampled_rect(d, vs);
+                if (copy_src != src || !rect_inside(need, copy_ok) || rect_meets(need, copy_dirty)) {
+                    if (rp) { SDL_EndGPURenderPass(rp); rp = NULL; cur_fbp = ~0u; }
+                    SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
+                    u32 x = (u32)need.x0 * scale, y = (u32)need.y0 * scale;
+                    SDL_GPUTextureLocation a = {src, 0, 0, x, y, 0}, b = {scratch, 0, 0, x, y, 0};
+                    SDL_CopyGPUTextureToTexture(cp, &a, &b, (u32)(need.x1 - need.x0) * scale, (u32)(need.y1 - need.y0) * scale, 1, false);
+                    SDL_EndGPUCopyPass(cp);
+                    copy_src = src;
+                    copy_ok = need;
+                    copy_dirty = (Rect){0, 0, 0, 0};
+                    rt_copies++;
+                    rt_copy_px += (u64)(need.x1 - need.x0) * (need.y1 - need.y0) * scale * scale;
+                }
                 tex = scratch;
             } else if (src) tex = src;
         }
@@ -701,6 +776,7 @@ void gpu_render(GpuFrame *f, const GpuVertex *verts) {
             last_smp = samplers[smp];
         }
         SDL_DrawGPUPrimitives(rp, d->count, 1, d->first, 0);
+        if (color == copy_src) copy_dirty = rect_union(copy_dirty, drawn_rect(d, vs, wide_3d));
     }
     if (rp) SDL_EndGPURenderPass(rp);
     for (int k = 0; k < ndrawn; k++)
