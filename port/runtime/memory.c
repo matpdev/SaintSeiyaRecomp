@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "r5900.h"
+#include "platform.h"
 #include "runtime.h"
 #include "gs.h"
 
@@ -24,7 +25,7 @@ static u8 io_gs[0x2000] __attribute__((aligned(16)));
 static u8 seen_ee[0x10000 / 4], seen_gs[0x2000 / 4];
 
 void memory_init(void) {
-    rt_ram = aligned_alloc(64, 0x02000000);
+    rt_ram = platform_aligned_alloc(64, 0x02000000);
     memset(rt_ram, 0, 0x02000000);
 }
 

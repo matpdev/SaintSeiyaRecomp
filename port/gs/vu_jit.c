@@ -24,7 +24,9 @@
  */
 #define _GNU_SOURCE
 #include <dirent.h>
+#ifndef _WIN32
 #include <dlfcn.h>
+#endif
 #include <errno.h>
 #include <limits.h>
 #include <pthread.h>
@@ -884,6 +886,20 @@ static char *generate(const u8 *code, u32 entry, const u8 *in) {
 
 /* ------------------------------------------------------------------------------- compiling */
 
+#ifdef _WIN32
+/* Windows: only the programs built in (no compiler at run time); the others are interpreted */
+static void load(Prog *p, const char *so) { (void)so; __atomic_store_n(&p->state, 2, __ATOMIC_RELEASE); }
+static void *compiler(void *arg) { (void)arg; return NULL; }
+static void clean_cache(const char *dir, const char *current) { (void)dir; (void)current; }
+static int setup(void) {
+    const char *e = getenv("SSTHEH_VUJIT");
+    if (e && !atoi(e)) return 0;
+    if (!&vu_builtin_count || !vu_builtin_count) return 0;
+    header_hash = vu_builtin_header_hash;
+    rt_log("vujit", "%d VU1 programs built in", vu_builtin_count);
+    return 1;
+}
+#else
 static void load(Prog *p, const char *so) {
     void *h = dlopen(so, RTLD_NOW | RTLD_LOCAL);
     ProgFn fn = h ? (ProgFn)dlsym(h, "vu_prog") : NULL;
@@ -1047,6 +1063,7 @@ static int setup(void) {
     }
     return 1;
 }
+#endif
 
 /* The native code for the program starting at v->pc, or NULL (interpret it). */
 static ProgFn find(Vu *v) {

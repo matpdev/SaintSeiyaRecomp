@@ -18,6 +18,7 @@
 #include "r5900.h"
 #include "runtime.h"
 #include "kernel.h"
+#include "platform.h"
 
 int cdvd_open(const char *path);
 int display_window(void);
@@ -45,12 +46,7 @@ static const char *disc_file(const char *name) {
     char *out = paths[k++ & 1], exe[1024];
     snprintf(out, 1100, "disc/%s", name);
     if (access(out, R_OK) == 0) return out;
-    ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
-    if (n <= 0) return out;
-    exe[n] = 0;
-    char *slash = strrchr(exe, '/');
-    if (!slash) return out;
-    *slash = 0;
+    if (platform_exe_dir(exe, sizeof exe)) return out;
     snprintf(out, 1100, "%s/disc/%s", exe, name);
     if (access(out, R_OK) == 0) return out;
     snprintf(out, 1100, "%s/../disc/%s", exe, name);

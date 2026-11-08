@@ -5,6 +5,31 @@
  * SSTHEH_PROF_IN=<function>: also the hottest 16-byte spots inside it, as offsets for addr2line.
  */
 #define _GNU_SOURCE
+#include <stdint.h>
+#include <time.h>
+#include <x86intrin.h>
+#include "perf.h"
+
+/* the time stamp counter's rate */
+double perf_tsc_ns = 0.25;
+
+void perf_calibrate(void) {
+    struct timespec a, b;
+    clock_gettime(CLOCK_MONOTONIC, &a);
+    uint64_t c0 = __rdtsc();
+    struct timespec d = {0, 20000000};
+    nanosleep(&d, NULL);
+    clock_gettime(CLOCK_MONOTONIC, &b);
+    uint64_t c1 = __rdtsc();
+    double ns = (b.tv_sec - a.tv_sec) * 1e9 + (b.tv_nsec - a.tv_nsec);
+    if (c1 > c0) perf_tsc_ns = ns / (double)(c1 - c0);
+}
+
+#ifdef _WIN32
+/* Windows: no SIGPROF; the profiler is off */
+void prof_start(void) {}
+void prof_report(void) {}
+#else
 #include <dlfcn.h>
 #include <signal.h>
 #include <stdio.h>
@@ -48,19 +73,7 @@ void prof_start(void) {
 
 /* The time stamp counter's rate against the monotonic clock, over 20 ms (the counter runs at a
  * constant rate on current x86 CPUs). */
-double perf_tsc_ns = 0.25;
 
-void perf_calibrate(void) {
-    struct timespec a, b;
-    clock_gettime(CLOCK_MONOTONIC, &a);
-    uint64_t c0 = __rdtsc();
-    struct timespec d = {0, 20000000};
-    nanosleep(&d, NULL);
-    clock_gettime(CLOCK_MONOTONIC, &b);
-    uint64_t c1 = __rdtsc();
-    double ns = (b.tv_sec - a.tv_sec) * 1e9 + (b.tv_nsec - a.tv_nsec);
-    if (c1 > c0) perf_tsc_ns = ns / (double)(c1 - c0);
-}
 
 typedef struct { const char *name; int count; } Row;
 
@@ -147,3 +160,5 @@ void prof_report(void) {
             fprintf(stderr, "  %5.1f%%  %s\n", 100.0 * trows[k].count / th[pass].count, trows[k].name);
     }
 }
+
+#endif

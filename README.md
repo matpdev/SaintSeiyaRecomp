@@ -90,6 +90,14 @@ On the first run the game asks for the language and warns that there is no save 
 Options → Save/Load (answer "Yes" to create the save). The memory card in slot 1 is the folder
 `~/.local/share/sstheh/memcard1`: the save goes to `BESLES-54162GX/` and is loaded by itself when the game starts.
 
+### Windows
+
+The port also builds for Windows (64-bit, Vulkan), cross-compiled from Linux with MinGW-w64: `tools/win_deps.sh`
+fetches SDL3, FFmpeg and builds FreeType into `tools/win/`; after the Linux build, `python3 configure.py --no-split
+--windows && ninja -f build-win.ninja` makes `build-win/sstheh.exe`, and `tools/release.sh windows` the release
+zip (`dist/SaintSeiyaDecomp-windows-x64.zip`: the game, the setup with Qt 6's llvm-mingw build from `tools/win/qt`,
+the libraries' licenses). On Windows the settings and the memory card are in `%APPDATA%\sstheh`. Tested with Wine.
+
 ### The release's setup
 
 `tools/setup/` is the setup of the prebuilt release (Qt 6): it checks the player's disc image (the executable must be

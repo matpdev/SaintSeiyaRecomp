@@ -23,6 +23,7 @@
 
 #include "r5900.h"
 #include "runtime.h"
+#include "platform.h"
 #include "kernel.h"
 #include "iop.h"
 #include "gs.h"
@@ -59,7 +60,11 @@ typedef struct { int used, cause, enabled; u32 handler, arg, next; } Handler;
 typedef struct { int used; u64 when; u32 handler, arg; } Alarm;
 
 /* recursive: interrupt handlers run with the lock held and make (i-prefixed) syscalls */
+#ifdef _WIN32
+static pthread_mutex_t big = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
+#else
 static pthread_mutex_t big = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
+#endif
 static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
 static Thread threads[MAX_THREADS];
 static Sema semas[MAX_SEMAS];
@@ -289,7 +294,7 @@ static void *timer_main(void *arg) {
     for (;;) {
         next.tv_nsec += ntsc ? 16683333 : 20000000;   /* 59.94 or 50 Hz */
         if (next.tv_nsec >= 1000000000) { next.tv_nsec -= 1000000000; next.tv_sec++; }
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
+        platform_sleep_until(&next);
         timer_vblank = 1;
         rt_irq_pending = 1;
     }
@@ -648,5 +653,5 @@ void kernel_run(u32 entry) {
     t->host_started = 1;
     pthread_mutex_unlock(&big);
     thread_main((void *)(intptr_t)1);
-    for (;;) pause();
+    platform_sleep_forever();
 }

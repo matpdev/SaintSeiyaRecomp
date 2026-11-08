@@ -29,7 +29,6 @@
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
-#include <fnmatch.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,6 +39,7 @@
 
 #include "r5900.h"
 #include "runtime.h"
+#include "platform.h"
 
 #define MC_OK 0
 #define MC_NOENT 0x81010002u
@@ -55,14 +55,8 @@ static void setup(void) {
     const char *e = getenv("SSTHEH_MEMCARD");
     if (e && *e) snprintf(root, sizeof root, "%s", e);
     else {
-        const char *d = getenv("XDG_DATA_HOME"), *h = getenv("HOME");
-        char base[PATH_MAX - 32];
-        if (d && *d) snprintf(base, sizeof base, "%s", d);
-        else snprintf(base, sizeof base, "%s/.local/share", h ? h : "/tmp");
-        char p[PATH_MAX];
-        snprintf(p, sizeof p, "%s/sstheh", base);
-        mkdir(base, 0755);
-        mkdir(p, 0755);
+        char p[PATH_MAX - 16];
+        platform_data_dir(p, sizeof p);
         snprintf(root, sizeof root, "%s/memcard1", p);
     }
     mkdir(root, 0755);
@@ -101,7 +95,11 @@ static void host_path(const char *card, char *out, size_t n) {
 
 static void card_time(Ctx *c, u32 a, time_t t) {
     struct tm tm;
+#ifdef _WIN32
+    localtime_s(&tm, &t);
+#else
     localtime_r(&t, &tm);
+#endif
     wr8(c, a, 0);
     wr8(c, a + 1, (u8)tm.tm_sec);
     wr8(c, a + 2, (u8)tm.tm_min);
@@ -255,7 +253,7 @@ void hle_mc2_getdir(Ctx *c) {               /* socket, pattern, offset, max, ent
     if (!d) { if (count_at) wr32(c, count_at, 0); rt_log("mc", "list %s: no directory", pat); RET(MC_NOENT); }
     for (struct dirent *de; (de = readdir(d));) {
         if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
-        if (fnmatch(glob, de->d_name, 0)) continue;
+        if (!platform_match(glob, de->d_name)) continue;
         if (seen++ < offset) continue;
         if (n >= max) break;
         char p[PATH_MAX];

@@ -30,6 +30,9 @@ def main():
     ap.add_argument("--march", default="x86-64-v2",
                     help="CPU the port is built for (default x86-64-v2: SSE4.2, any x86-64 PC of the last ~12 years; "
                          "native: this one only)")
+    ap.add_argument("--windows", action="store_true",
+                    help="also write build-win.ninja: the port for Windows with MinGW-w64 (ninja -f build-win.ninja; "
+                         "needs the Linux build first, and tools/win/ from tools/win_deps.sh)")
     args = ap.parse_args()
     os.chdir(ROOT)
 
@@ -139,6 +142,68 @@ def main():
         n.build("build/sstheh", "link", port_objs + vu_objs)
         n.build("port", "phony", "build/sstheh")
     print(f"build.ninja written: {len(sources)} asm files, {len(bins)} binary files")
+    if args.windows:
+        windows(args)
+
+
+def windows(args):
+    """build-win.ninja: build-win/sstheh.exe with MinGW-w64, from the C the Linux build generated (build/recomp,
+    build/vu, build/shaders) and port/; SDL3 and FFmpeg from tools/win/ (DLLs copied next to the exe)."""
+    sdl = glob.glob("tools/win/SDL3-*/x86_64-w64-mingw32")
+    ff = glob.glob("tools/win/ffmpeg-*-win64-lgpl-shared-*")
+    ft = "tools/win/freetype"
+    if not sdl:
+        sys.exit("tools/win/SDL3-*: run tools/win_deps.sh first")
+    sdl = sdl[0]
+    ff = ff[0] if ff else None
+    has_ft = os.path.exists(f"{ft}/lib/libfreetype.a")
+    inc = (f"-Iport/runtime -Iport/kernel -Iport/iop -Iport/gs -Ibuild/recomp -Ibuild/shaders -I{sdl}/include"
+           + (f" -I{ff}/include" if ff else "") + (f" -I{ft}/include/freetype2" if has_ft else ""))
+    cc = "x86_64-w64-mingw32-gcc"
+    flags = f"-g -w -fno-strict-aliasing -ffp-contract=off -march={args.march} -D_FILE_OFFSET_BITS=64"   # off_t: 64 bits (the 4 GB image)
+    with open("build-win.ninja", "w") as f:
+        n = ninja_syntax.Writer(f, width=120)
+        n.variable("ninja_required_version", "1.10")
+        n.rule("cc", f"{cc} -c -O1 {flags} {inc} -MMD -MF $out.d $in -o $out", depfile="$out.d", deps="gcc", description="cc $in")
+        n.rule("cc_fast", f"{cc} -c -O2 {flags} {inc} $extra -MMD -MF $out.d $in -o $out", depfile="$out.d", deps="gcc",
+               description="cc $in")
+        libs = f"-L{sdl}/lib -lSDL3"
+        if ff:
+            libs += " " + " ".join(f"{ff}/bin/{os.path.basename(d)}" for d in sorted(glob.glob(f"{ff}/bin/*.dll"))
+                                  if not os.path.basename(d).startswith(("avdevice", "avfilter")))
+        if has_ft:
+            libs += f" {ft}/lib/libfreetype.a"
+        n.rule("link", f"{cc} -mwindows -static-libgcc $in -o $out {libs} -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic -lm",
+               description="link $out")
+        n.rule("copy", "cp $in $out", description="copy $out")
+        objs = []
+        srcs = sorted(glob.glob("build/recomp/rc_*.c")) + ["build/recomp/functab.c"]
+        srcs += sorted(glob.glob("port/**/*.c", recursive=True)) + sorted(glob.glob("build/vu/*.c"))
+        for src in srcs:
+            o = "build-win/obj/" + src.replace("/", "_")[:-2] + ".o"
+            extra = ""
+            if src == "port/hle/movie.c" and ff:
+                extra = "-DSSTHEH_FFMPEG"
+            if src == "port/hle/textfont.c" and has_ft:
+                extra = "-DSSTHEH_FREETYPE"
+            if src.startswith("build/recomp/"):
+                n.build(o, "cc", src)
+            else:
+                n.build(o, "cc_fast", src, variables={"extra": extra})
+            objs.append(o)
+        n.build("build-win/sstheh.exe", "link", objs)
+        dlls = [f"{sdl}/bin/SDL3.dll"]
+        if ff:
+            dlls += [d for d in sorted(glob.glob(f"{ff}/bin/*.dll")) if not os.path.basename(d).startswith(("avdevice", "avfilter"))]
+        outs = []
+        for d in dlls:
+            out = "build-win/" + os.path.basename(d)
+            n.build(out, "copy", d)
+            outs.append(out)
+        n.build("all", "phony", ["build-win/sstheh.exe"] + outs)
+        n.default("all")
+    print("build-win.ninja written" + ("" if has_ft else " (no FreeType for Windows in tools/win/freetype: the texts keep the disc's font)")
+          + ("" if ff else " (no FFmpeg for Windows: the opening video is skipped)"))
 
 
 main()

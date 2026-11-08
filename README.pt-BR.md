@@ -88,6 +88,15 @@ Na primeira execução o jogo pede o idioma e avisa que não há save no memory 
 (responda "Yes" para criar o save). O memory card do slot 1 é a pasta `~/.local/share/sstheh/memcard1`: o save fica
 em `BESLES-54162GX/` e é carregado sozinho quando o jogo abre.
 
+### Windows
+
+O port também compila para Windows (64 bits, Vulkan), em compilação cruzada a partir do Linux com MinGW-w64: o
+`tools/win_deps.sh` baixa o SDL3 e o FFmpeg e compila o FreeType em `tools/win/`; depois do build do Linux,
+`python3 configure.py --no-split --windows && ninja -f build-win.ninja` gera o `build-win/sstheh.exe`, e
+`tools/release.sh windows` o zip do release (`dist/SaintSeiyaDecomp-windows-x64.zip`: o jogo, o instalador com o
+build llvm-mingw do Qt 6 em `tools/win/qt`, as licenças das bibliotecas). No Windows, as configurações e o memory
+card ficam em `%APPDATA%\sstheh`. Testado com o Wine.
+
 ### O instalador do release
 
 `tools/setup/` é o instalador do release pré-compilado (Qt 6): confere a imagem do disco do jogador (o executável

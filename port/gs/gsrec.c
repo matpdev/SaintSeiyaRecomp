@@ -20,6 +20,7 @@
 #include <time.h>
 
 #include "r5900.h"
+#include "platform.h"
 #include "runtime.h"
 #include "gs.h"
 #include "gpu.h"
@@ -133,7 +134,7 @@ int gsrec_replay(const char *path, int warm) {
     fseek(f, 0, SEEK_END);
     size_t size = (size_t)(ftell(f) - at);
     fseek(f, at, SEEK_SET);
-    u8 *ev = aligned_alloc(64, (size + 63) & ~(size_t)63);
+    u8 *ev = platform_aligned_alloc(64, (size + 63) & ~(size_t)63);
     if (!ev || fread(ev, 1, size, f) != size) { fprintf(stderr, "%s: cannot read\n", path); return 1; }
     fclose(f);
     u64 h = 0xCBF29CE484222325ull;

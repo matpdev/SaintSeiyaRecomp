@@ -19,7 +19,7 @@
 #include "pad.h"
 #include "perf.h"
 #include "gpu.h"
-#include <sys/resource.h>
+#include "platform.h"
 #include <sys/stat.h>
 
 void gpu_set_overlay(const u32 *px, int w, int h);   /* gpu_vk.c */
@@ -290,13 +290,7 @@ static WinSize win_size = {1920, 1080};
 
 /* ~/.local/share/sstheh/<name>: settings chosen with the F keys */
 void display_config_path(char *p, size_t n, const char *name) {
-    const char *d = getenv("XDG_DATA_HOME"), *h = getenv("HOME");
-    char base[1024];
-    if (d && *d) snprintf(base, sizeof base, "%s", d);
-    else snprintf(base, sizeof base, "%s/.local/share", h ? h : "/tmp");
-    mkdir(base, 0755);
-    snprintf(p, n, "%s/sstheh", base);
-    mkdir(p, 0755);
+    platform_data_dir(p, n);
     snprintf(p + strlen(p), n - strlen(p), "/%s", name);
 }
 
@@ -362,11 +356,7 @@ static Panel panel;
 static int panel_on = 1;
 /* (VU1 time includes the XGKICKs it makes, which gs_ns counts too) */
 
-static double cpu_seconds(void) {
-    struct rusage ru;
-    getrusage(RUSAGE_SELF, &ru);
-    return ru.ru_utime.tv_sec + ru.ru_stime.tv_sec + (ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) / 1e6;
-}
+static double cpu_seconds(void) { return platform_cpu_seconds(); }
 
 /* Called at every vertical blank shown. A game frame is counted when primitives were drawn since
    the previous vertical blank. */
@@ -408,9 +398,13 @@ static void panel_update(void) {
     else snprintf(size, sizeof size, "full screen");
     snprintf(panel.line[3], 96, "F1: %s  F2: %s  F3: hide  F4: vsync %s", size, widescreen_on() ? "16:9" : "4:3", gpu_on && gpu_vsync() ? "on" : "off");
     if (getenv("SSTHEH_PERF_LOG")) {
+#ifndef _WIN32
         struct mallinfo2 mi = mallinfo2();
         fprintf(stderr, "[perf %5u] %s | %s | %s | heap %zu MB mmap %zu MB\n", kernel_vblank_count(), panel.line[0], panel.line[1],
                 panel.line[2], mi.uordblks >> 20, mi.hblkhd >> 20);
+#else
+        fprintf(stderr, "[perf %5u] %s | %s | %s\n", kernel_vblank_count(), panel.line[0], panel.line[1], panel.line[2]);
+#endif
     }
     t0 = now; prims0 = perf.prims; gs0 = perf.gs_ns; vu0 = perf.vu_ns; vb0 = kernel_vblank_count(); cpu0 = cpu;
     frames = 0;

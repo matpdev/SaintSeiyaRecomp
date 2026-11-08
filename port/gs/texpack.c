@@ -22,6 +22,7 @@
 
 #include "r5900.h"
 #include "runtime.h"
+#include "platform.h"
 
 void display_config_path(char *p, size_t n, const char *name);     /* display.c */
 

@@ -13,6 +13,9 @@
  *   - starts the game.
  * Without a window: SaintSeiyaDecomp-setup --install <image.iso> [--no-font] [--no-shortcut] [--4-3].
  * The window speaks Portuguese on a Portuguese system, English otherwise.
+ *
+ * On Windows it is built with MinGW-w64 (g++, libstdc++) against Qt's llvm-mingw build (libc++): no
+ * std:: type crosses into Qt (folders are made with std::filesystem, the copy runs on a std::thread).
  */
 #include <QApplication>
 #include <QCheckBox>
@@ -37,9 +40,10 @@
 #include <QStandardPaths>
 #include <QStorageInfo>
 #include <QVBoxLayout>
-#include <QtConcurrent>
 #include <cstdio>
+#include <filesystem>
 #include <functional>
+#include <thread>
 
 static const char *const ELF_SHA1 = "7ba6b0a1c05a94f28452840fcb73c204e46e79e6";     /* config/SLES_541.62.sha1 */
 static const char *const ISO_SHA1 = "6da748b0a966a884fc08b3d0d56ffb1bf51848c7";     /* Redump: (Europe) (En,Ja,Fr,Es,It) */
@@ -51,6 +55,11 @@ static bool portuguese;
 static QString T(const char *en, const char *pt) { return QString::fromUtf8(portuguese ? pt : en); }
 
 /* ------------------------------------------------------------------------------------- places */
+
+static void make_path(const QString &dir) {
+    std::error_code e;
+    std::filesystem::create_directories(std::filesystem::path(dir.toStdWString()), e);
+}
 
 static QString game_dir;                                  /* where the game is: the setup's folder */
 
@@ -64,10 +73,14 @@ static QString game_exe() {
 static QString disc_dir() { return game_dir + "/disc"; }
 static QString fonts_dir() { return game_dir + "/fonts"; }
 
-/* where the game keeps its settings (port/gs/display.c: ~/.local/share/sstheh) */
+/* where the game keeps its settings (port/runtime/platform.c: ~/.local/share/sstheh, %APPDATA%\sstheh) */
 static QString config_dir() {
+#ifdef Q_OS_WIN
+    QString d = qEnvironmentVariable("APPDATA") + "/sstheh";
+#else
     QString d = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/sstheh";
-    QDir().mkpath(d);
+#endif
+    make_path(d);
     return d;
 }
 
@@ -147,7 +160,7 @@ struct Options {
 /* Copies the image into disc/ (the executable too); progress(done, total). The whole image's SHA-1 in
  * *sha1. Empty: done; else what went wrong. */
 static QString copy_disc(const QString &iso, const Disc &disc, QByteArray *sha1, const std::function<void(qint64, qint64)> &progress) {
-    QDir().mkpath(disc_dir());
+    make_path(disc_dir());
     QSaveFile elf(disc_dir() + "/SLES_541.62");
     if (!elf.open(QIODevice::WriteOnly) || elf.write(disc.elf) != disc.elf.size() || !elf.commit())
         return T("Can't write into %1.", "Não foi possível gravar em %1.").arg(disc_dir());
@@ -166,7 +179,8 @@ static QString copy_disc(const QString &iso, const Disc &disc, QByteArray *sha1,
     }
     QStorageInfo st(disc_dir());
     QFile old(dst);
-    if (st.bytesAvailable() + (old.exists() ? old.size() : 0) < disc.size + (64 << 20))
+    if (st.isValid() && st.isReady() && st.bytesAvailable() > 0 &&     /* a measure that failed doesn't stop it: the copy would */
+        st.bytesAvailable() + (old.exists() ? old.size() : 0) < disc.size + (64 << 20))
         return T("Not enough free space in %1 (%2 GB needed).", "Não há espaço livre suficiente em %1 (são precisos %2 GB).")
             .arg(disc_dir()).arg(disc.size / 1e9, 0, 'f', 1);
     QFile out(dst + ".part");
@@ -204,7 +218,7 @@ static QString download_font() {
     if (!error.isEmpty() || data.size() < 100000)
         return T("The font could not be downloaded (%1): the texts keep the disc's font.",
                  "A fonte não pôde ser baixada (%1): os textos ficam com a fonte do disco.").arg(error.isEmpty() ? "?" : error);
-    QDir().mkpath(fonts_dir());
+    make_path(fonts_dir());
     QSaveFile f(fonts_dir() + "/" + FONT_FILE);
     if (!f.open(QIODevice::WriteOnly) || f.write(data) != data.size() || !f.commit())
         return T("Can't write into %1.", "Não foi possível gravar em %1.").arg(fonts_dir());
@@ -232,7 +246,7 @@ static void make_shortcut() {
     QFile::link(game_exe(), QStandardPaths::writableLocation(QStandardPaths::ApplicationsLocation) + "/" + name);
 #else
     QString dir = QStandardPaths::writableLocation(QStandardPaths::ApplicationsLocation);
-    QDir().mkpath(dir);
+    make_path(dir);
     QFile f(dir + "/saintseiyadecomp.desktop");
     if (!f.open(QIODevice::WriteOnly)) return;
     f.write(QString("[Desktop Entry]\nType=Application\nName=Saint Seiya: The Hades (PC Port)\n"
@@ -407,16 +421,18 @@ private:
         QString iso = path->text();
         Disc d = disc;
         auto *sha1 = new QByteArray;
-        auto future = QtConcurrent::run([this, iso, d, sha1] {
-            return copy_disc(iso, d, sha1, [this](qint64 done, qint64 total) {
+        std::thread([this, iso, d, sha1, o] {
+            QString err = copy_disc(iso, d, sha1, [this](qint64 done, qint64 total) {
                 int v = int(done * 1000 / (total ? total : 1));
                 QMetaObject::invokeMethod(bar, [this, v] { bar->setValue(v); }, Qt::QueuedConnection);
             });
-        });
-        auto *watch = new QFutureWatcher<QString>(this);
-        connect(watch, &QFutureWatcher<QString>::finished, this, [this, watch, sha1, o] {
-            QString err = watch->result();
-            watch->deleteLater();
+            QMetaObject::invokeMethod(this, [this, err, sha1, o] { copied(err, sha1, o); }, Qt::QueuedConnection);
+        }).detach();
+    }
+
+    /* after the copy, on the window's thread */
+    void copied(const QString &err, QByteArray *sha1, const Options &o) {
+        {
             QStringList notes;
             if (err.isEmpty()) {
                 notes << sha1_note(*sha1);
@@ -438,8 +454,7 @@ private:
             for (QWidget *w : findChildren<QWidget *>()) w->setEnabled(true);
             play->setEnabled(installed() && QFileInfo(game_exe()).exists());
             install->setEnabled(disc.ok);
-        });
-        watch->setFuture(future);
+        }
     }
 };
 

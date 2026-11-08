@@ -31,6 +31,7 @@
 
 #include "r5900.h"
 #include "runtime.h"
+#include "platform.h"
 
 #ifdef SSTHEH_FREETYPE
 #include <ft2build.h>
@@ -107,11 +108,7 @@ static void decide(void) {
         char dir[1024], exe[1024];
         display_config_path(dir, sizeof dir, "fonts");
         int found = font_in(dir);
-        ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
-        if (!found && n > 0) {
-            exe[n] = 0;
-            char *slash = strrchr(exe, '/');
-            if (slash) *slash = 0;
+        if (!found && !platform_exe_dir(exe, sizeof exe)) {
             snprintf(dir, sizeof dir, "%s/fonts", exe);
             found = font_in(dir);
             if (!found) { snprintf(dir, sizeof dir, "%s/../fonts", exe); found = font_in(dir); }

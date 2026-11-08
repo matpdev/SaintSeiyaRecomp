@@ -15,3 +15,7 @@ build.ninja
 .ninja_log
 .ninja_deps
 /fonts/
+/tools/win/
+/dist/
+/build-win/
+/build-win.ninja
