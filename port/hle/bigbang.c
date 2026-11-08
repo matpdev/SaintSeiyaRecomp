@@ -29,11 +29,7 @@
  * as it counts the player's. The counter's timing press (the button shown on the screen, pressed
  * at the right moment: the query returning to 0x001BC2C4) stays the player's.
  */
-#include <string.h>
-#include <stddef.h>
-
-#include "r5900.h"
-#include "runtime.h"
+#include "hle.h"
 #include "pad.h"
 
 int training_automash(void);                  /* training.c: the menu's options */
@@ -41,61 +37,54 @@ int training_revival(void);
 int training_counter(void);
 u32 kernel_vblank_count(void);
 
-#define EVENTS_LO 0x001B9F00u
-#define EVENTS_HI 0x001C0400u
-#define COUNTER_RA 0x001BC2C4u
+#define MASH_EVERY 3                          /* frames between two auto-mash presses (20 a second) */
 
-/* the pad manager's pressed-this-frame word for a player controller's port, or 0 */
+/* the pad manager's pressed-this-frame word for a player controller's pad, or 0 */
 static u32 pressed_word(Ctx *c, u32 ctl) {
-    s16 port = (s16)rd16(c, ctl + 0x18);
+    s16 port = (s16)rd16(c, ctl + CTL_PORT);
     if (port < 0 || port > 1) return 0;
-    u8 regs[offsetof(Ctx, thread)];
-    memcpy(regs, c, sizeof regs);
-    SET32(31, 0);
-    rt_call(c, 0x00138DE0);
-    u32 word = RW(2) + (u32)port * 0xE4 + 0x44;
-    memcpy(c, regs, sizeof regs);
+    GuestRegs kept;
+    regs_keep(c, &kept);
+    u32 word = game_call(c, FN_PAD_MANAGER) + (u32)port * PAD_PORT_STRIDE + PAD_PRESSED_WORD;
+    regs_back(c, &kept);
     return word;
 }
 
+/* A player controller's button query (a0 = controller), asked from somewhere (RW(31)). */
 static void mash(Ctx *c) {
-    u32 ra = RW(31);
-    if (ra == COUNTER_RA && !training_counter()) {          /* no counter: the face buttons unseen */
-        u32 word = pressed_word(c, RW(4));
+    u32 ra = RW(31), ctl = RW(4);
+    if (ra == RA_BB_COUNTER && !training_counter()) {       /* no counter: the face buttons unseen */
+        u32 word = pressed_word(c, ctl);
         if (word) wr16(c, word, rd16(c, word) & 0x0FFF);
         return;
     }
-    if (ra < EVENTS_LO || ra >= EVENTS_HI || ra == COUNTER_RA || !training_automash()) return;
-    u32 ctl = RW(4);
-    s16 port = (s16)rd16(c, ctl + 0x18);
+    int from_events = ra >= RA_BB_EVENTS_LO && ra < RA_BB_EVENTS_HI && ra != RA_BB_COUNTER;
+    if (!from_events || !training_automash()) return;
+    s16 port = (s16)rd16(c, ctl + CTL_PORT);
     if (port < 0 || port > 1) return;
+    /* one face button more every MASH_EVERY frames, the same one for every query in a frame */
     static u32 last[2], turn[2];
     static const u16 face[4] = {PAD_CROSS, PAD_CIRCLE, PAD_SQUARE, PAD_TRIANGLE};
     u32 vb = kernel_vblank_count();
-    if (vb - last[port] < 3 && vb != last[port]) return;
+    if (vb - last[port] < MASH_EVERY && vb != last[port]) return;
     if (vb - last[port] > 60) rt_log("mash", "port %d: auto-mash for the Big Bang event at %08X", port + 1, ra - 8);
     if (vb != last[port]) { last[port] = vb; turn[port]++; }
-    u8 regs[offsetof(Ctx, thread)];
-    memcpy(regs, c, sizeof regs);
-    SET32(31, 0);
-    rt_call(c, 0x00138DE0);                      /* the pad manager */
-    u32 word = RW(2) + (u32)port * 0xE4 + 0x44;
-    memcpy(c, regs, sizeof regs);
+    u32 word = pressed_word(c, ctl);
     wr16(c, word, rd16(c, word) | face[turn[port] & 3]);
 }
 
 /* 0x00315070 (replaced): the computer's "which face button" query, a draw */
 void hle_com_face(Ctx *c) {
     u32 ra = RW(31);
-    if (ra == COUNTER_RA) {
+    if (ra == RA_BB_COUNTER) {
         static u32 last;
         u32 vb = kernel_vblank_count();
-        if (vb - last > 60) rt_log("bbc", "the computer may counter a Big Bang Attack%s", training_counter() ? "" : ": no (Big Bang Counter off)");
+        if (vb - last > 60)
+            rt_log("bbc", "the computer may counter a Big Bang Attack%s", training_counter() ? "" : ": no (Big Bang Counter off)");
         last = vb;
         if (!training_counter()) { SET64(2, 0); return; }
     }
-    rt_call(c, 0x00194460);
-    u32 r = RW(2) % 100;
+    u32 r = game_call(c, FN_RAND) % 100;      /* as the game: under 6 a wrong button, under 68 the right one */
     SET64(2, r < 6 ? 2 : r < 68 ? 1 : 0);
 }
 
@@ -103,16 +92,14 @@ void hle_mash_any(Ctx *c) { mash(c); }        /* 0x002FF9D0 */
 void hle_mash_face(Ctx *c) { mash(c); }       /* 0x002FF960, 0x002FF8A0 */
 void hle_mash_some(Ctx *c) { mash(c); }       /* 0x002FF910 */
 
-/* 0x002F2630 (battle): the round's end check */
+/* 0x002F2630 (before; a0 = battle): the round's end check. With revival off, a fighter at life <= 0
+   is marked as finished, so the check knocks them out. */
 void hle_revival_check(Ctx *c) {
     if (training_revival()) return;
     u32 battle = RW(4);
-    for (int k = 0; k < 2; k++) {
-        u32 f = rd32(c, battle + 968 + 4 * k);
-        if (!f) continue;
-        u32 life = rd32(c, f + 0x87B0);
-        float v;
-        memcpy(&v, &life, 4);
-        if (v <= 0.0f) wr8(c, f + 0x87B0 + 0x5C, 1);
+    for (u32 k = 0; k < 2; k++) {
+        u32 fighter = rd32(c, battle + BATTLE_FIGHTERS + 4 * k);
+        if (!fighter) continue;
+        if (rd_float(c, fighter + FIGHTER_LIFE) <= 0.0f) wr8(c, fighter + FIGHTER_LIFE + LIFE_FINISHING, 1);
     }
 }

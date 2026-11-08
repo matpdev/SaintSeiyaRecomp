@@ -37,8 +37,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "r5900.h"
-#include "runtime.h"
+#include "hle.h"
 #include "platform.h"
 
 #define MC_OK 0
@@ -293,11 +292,11 @@ void hle_mc2_lookup(Ctx *c) {               /* socket, name, raw entry, 0, 0 */
 
 /* void mc2_request(void) (0x001374F0): wakes the worker for the request in D_0050BDC0 (logged). */
 void hle_mc2_request(Ctx *c) {
-    u32 cmd = rd32(c, 0x0050BDC4);
+    u32 req = D_MC2_REQUEST, cmd = rd32(c, req + 4);
     char name[128];
-    guest_str(c, 0x0050BDC0 + 0x41C, name, sizeof name);
+    guest_str(c, req + 0x41C, name, sizeof name);
     rt_log("mc", "request %u (%s) args %08X %08X %08X %08X", cmd, cmd == 2 || cmd == 3 || cmd == 4 ? "" : name,
-           rd32(c, 0x0050BDCC), rd32(c, 0x0050BDD0), rd32(c, 0x0050BDD4), rd32(c, 0x0050BDD8));
-    SET64(4, (s32)rd32(c, 0x0051E184));
-    rt_call(c, 0x0010F680);                        /* SignalSema */
+           rd32(c, req + 0xC), rd32(c, req + 0x10), rd32(c, req + 0x14), rd32(c, req + 0x18));
+    SET64(4, (s32)rd32(c, D_MC2_SEMA));
+    rt_call(c, FN_SIGNAL_SEMA);
 }

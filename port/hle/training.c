@@ -32,12 +32,9 @@
 #include <stddef.h>
 #include <string.h>
 
-#include "r5900.h"
-#include "runtime.h"
+#include "hle.h"
 #include "pad.h"
 
-#define VT_COM 0x004DE0D0u
-#define LIFE_OFF 0x87B0u
 #define REFILL_FRAMES 60      /* a second without being hit: life back to full */
 #define COMBO_FRAMES 45       /* hits closer than this belong to one combo */
 #define HIST 14
@@ -76,9 +73,6 @@ static struct {                             /* what the HUD shows, copied under 
     Input hist[HIST];
     int nhist;
 } shown;
-
-static float rdf(Ctx *c, u32 a) { u32 u = rd32(c, a); float f; memcpy(&f, &u, 4); return f; }
-static void wrf(Ctx *c, u32 a, float f) { u32 u; memcpy(&u, &f, 4); wr32(c, a, u); }
 
 void display_config_path(char *p, size_t n, const char *name);     /* display.c */
 
@@ -144,7 +138,7 @@ static void toggle(int i) {
 /* the damage of a hit, once it has been applied */
 static void settle(Ctx *c, Side *s) {
     if (s->before < 0) return;
-    float d = s->before - rdf(c, s->block);
+    float d = s->before - rd_float(c, s->block);
     s->before = -1;
     if (d <= 0) return;
     if (frame_no - s->last_hit > COMBO_FRAMES) { s->combo = 0; s->hits = 0; }
@@ -162,13 +156,17 @@ void hle_training_battle(Ctx *c) {
     battle_seen = kernel_vblank_count();
     frame_no++;
     for (int k = 0; k < 2; k++) {
-        u32 f = rd32(c, battle + 968 + 4 * k);
+        u32 fighter = rd32(c, battle + BATTLE_FIGHTERS + 4 * (u32)k);
         Side *s = &side[k];
-        if (!f) { s->block = 0; continue; }
-        if (s->block != f + LIFE_OFF) { memset(s, 0, sizeof *s); s->block = f + LIFE_OFF; s->before = -1; }
+        if (!fighter) { s->block = 0; continue; }
+        if (s->block != fighter + FIGHTER_LIFE) {           /* a new fighter */
+            memset(s, 0, sizeof *s);
+            s->block = fighter + FIGHTER_LIFE;
+            s->before = -1;
+        }
         settle(c, s);
-        if (training_on() && opt[OPT_LIFE] && frame_no - s->last_hit >= REFILL_FRAMES && rdf(c, s->block) < 100.0f)
-            wrf(c, s->block, 100.0f);
+        int refill = training_on() && opt[OPT_LIFE] && frame_no - s->last_hit >= REFILL_FRAMES;
+        if (refill && rd_float(c, s->block) < 100.0f) wr_float(c, s->block, 100.0f);
     }
     /* the first player's inputs */
     u16 b = pad_buttons[0];
@@ -181,7 +179,7 @@ void hle_training_battle(Ctx *c) {
     pthread_mutex_lock(&lock);
     shown.in_fight = 1;
     for (int k = 0; k < 2; k++) {
-        shown.life[k] = side[k].block ? rdf(c, side[k].block) : 0;
+        shown.life[k] = side[k].block ? rd_float(c, side[k].block) : 0;
         shown.hit[k] = side[k].hit;
         shown.combo[k] = side[k].combo;
         shown.hits[k] = side[k].hits;
@@ -197,8 +195,9 @@ void hle_training_damage(Ctx *c) {
         Side *s = &side[k];
         if (!s->block || s->block != RW(4)) continue;
         settle(c, s);                       /* a hit before it in the same frame */
-        if (training_on() && opt[OPT_LIFE] && rdf(c, s->block) < 50.0f) wrf(c, s->block, 100.0f);   /* never knocked out */
-        s->before = rdf(c, s->block);
+        if (training_on() && opt[OPT_LIFE] && rd_float(c, s->block) < 50.0f)
+            wr_float(c, s->block, 100.0f);                  /* never knocked out */
+        s->before = rd_float(c, s->block);
     }
 }
 
@@ -206,11 +205,9 @@ void hle_training_damage(Ctx *c) {
 void hle_training_controller(Ctx *c) {
     if (!training_on() || !opt[OPT_IDLE]) return;
     u32 ctl = RW(4);
-    if (rd32(c, ctl + 8) != VT_COM) return;
-    wr16(c, ctl + 0x158, 0);
-    wr8(c, ctl + 0x164, 0);
-    wr8(c, ctl + 0x165, 0);
-    wr8(c, ctl + 0x166, 0);
+    if (rd32(c, ctl + CTL_VTABLE) != VT_COM_CTL) return;
+    wr16(c, ctl + COM_DECISION, 0);
+    for (u32 i = 0; i < 3; i++) wr8(c, ctl + COM_DECISION_ARGS + i, 0);
 }
 
 /* ---- "Training" in the character select's mode menu (○ there: 1P VS 2P, 1P VS COM, COM VS 2P,
@@ -225,16 +222,16 @@ void hle_training_controller(Ctx *c) {
 
 /* 0x00224180 (before): the list's texts */
 void hle_training_menu_texts(Ctx *c) {
-    if (RW(31) != 0x0017E710 || RW(9) != 5) return;
-    u8 regs[offsetof(Ctx, thread)];
-    memcpy(regs, c, sizeof regs);
+    if (RW(31) != RA_MODE_MENU_TEXTS || RW(9) != 5) return;     /* a1 = the texts, t1 = how many */
+    /* a new list in the game's memory (a few bytes per menu opened): the 4 first texts, "Training",
+       "Back to main menu", the 0 ending the list, then the text "Training" itself */
     static const char label[] = "Training";
-    u32 size = 7 * 4 + (u32)(sizeof label + 1) * 2;     /* 6 texts and the 0 that ends the list */
+    u32 size = 7 * 4 + (u32)(sizeof label + 1) * 2;
+    GuestRegs kept;
+    regs_keep(c, &kept);
     SET32(4, size);
-    SET32(31, 0);
-    rt_call(c, 0x00100670);                 /* the game's allocator (a few bytes per menu opened) */
-    u32 block = RW(2);
-    memcpy(c, regs, sizeof regs);
+    u32 block = game_call(c, FN_ALLOC);
+    regs_back(c, &kept);
     if (!block) return;
     u32 old = RW(5), text = block + 7 * 4;
     for (u32 i = 0; i < 4; i++) wr32(c, block + 4 * i, rd32(c, old + 4 * i));
@@ -249,12 +246,12 @@ void hle_training_menu_texts(Ctx *c) {
 
 /* 0x0013BA20 (before): the list's first cursor, from 0x0017E720: still on "Back to main menu" */
 void hle_training_menu_cursor(Ctx *c) {
-    if (RW(31) == 0x0017E720 && RW(5) == 4) SET32(5, 5);
+    if (RW(31) == RA_MODE_MENU_CURSOR && RW(5) == 4) SET32(5, 5);
 }
 
 /* 0x0013DC10 (before): the owner told the mode chosen, from 0x0017E350 (a0 = menu-scene + 64) */
 void hle_training_menu_chosen(Ctx *c) {
-    if (RW(31) != 0x0017E350) return;
+    if (RW(31) != RA_MODE_MENU_CHOSEN) return;
     u32 scene = RW(4) - 64, menu = rd32(c, scene + 76);
     s16 item = (s16)rd16(c, menu + 184);
     if (item == 4) { wr32(c, scene + 72, 2); session = 1; rt_log("train", "training chosen in the mode menu"); }

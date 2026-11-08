@@ -23,18 +23,40 @@
  * SSTHEH_WIDE_SELECT=0: the strips as on the disc.
  */
 #include <stdlib.h>
-#include <string.h>
-#include <stddef.h>
 
-#include "r5900.h"
-#include "runtime.h"
+#include "hle.h"
 
 #define EXTRA 5                         /* pieces added at each end (the far ends are narrow) */
-#define ELEM 0x220
+#define ELEM 0x220                      /* an element's size */
 #define BASE 70                         /* the game's elements */
 #define NEW (4 * EXTRA)                 /* 2 borders x 2 ends */
 #define TOP0 1                          /* first top-border piece; bottom border = top + 12 */
 #define PORTRAIT0 25
+#define NCHARS 45                       /* portraits: one per character */
+
+/* the side (one carousel) */
+#define SIDE_ELEMENTS 0x10              /* -> its elements (new[]: the count at -0x10 + 4) */
+#define SIDE_HIDDEN 0x28                /* -> a byte: the whole side hidden */
+#define SIDE_SCENE 0x3C                 /* -> the scene (+0xB0: its method table) */
+#define SIDE_MODELS 0x40                /* -> ... -> the models (borders at +0x22C0 top, +0x2300 bottom) */
+#define SIDE_LIST 0x48                  /* -> the characters' list (+0x1C: items of 12 bytes, id at +8) */
+/* an element */
+#define EL_OBJECT 0                     /* -> its drawable (+0x10: method table) */
+#define EL_NODE 4                       /* -> its scene node */
+#define EL_MODEL 0x14
+#define EL_VTABLE 0x50                  /* its own method table */
+/* a scene node: place x, y, z, w; flags (bit 0: matrix to make again) */
+#define NODE_POS 0xC0
+#define NODE_FLAGS 0x8C
+/* methods (offsets in the tables above) */
+#define M_INIT 0xC                      /* element (vec): scale */
+#define M_INTO_LIST 0x14                /* element (layer): into a draw list */
+#define M_OUT_OF_LIST 0x18
+#define M_HIDE 0x1C                     /* drawable (hide) */
+#define M_LAYER 0x50                    /* scene (1) -> the layer */
+
+#define STEP 0x3F8CCCCDu                /* 1.1: a piece's width (floats as in the game's code) */
+#define HALF_STRIP 0x40D33334u          /* 6.6: from a strip's middle to its first piece */
 
 static int enabled(void) {
     static int on = -1;
@@ -44,7 +66,7 @@ static int enabled(void) {
 
 /* The side's elements, if they have the new pieces. */
 static u32 elements(Ctx *c, u32 side) {
-    u32 e = rd32(c, side + 0x10);
+    u32 e = rd32(c, side + SIDE_ELEMENTS);
     if (!e || rd32(c, e - 0x10 + 4) != BASE + NEW) return 0;
     return e;
 }
@@ -57,22 +79,21 @@ static u32 piece(u32 e, int bottom, int i) {
 }
 static int slot(int n) { return n < EXTRA ? n - EXTRA : 12 + n - EXTRA; }   /* n = 0 .. 2 * EXTRA - 1 */
 
-/* Calls into the game from a "before" hook keep the hooked function's registers. */
-typedef struct { u8 regs[offsetof(Ctx, thread)]; } Saved;
-static void save(Ctx *c, Saved *s) { memcpy(s->regs, c, sizeof s->regs); }
-static void restore(Ctx *c, const Saved *s) { memcpy(c, s->regs, sizeof s->regs); }
-
-static u32 call(Ctx *c, u32 fn, u32 a0, u32 a1) {
-    SET32(4, a0);
-    SET32(5, a1);
-    SET32(31, 0);
-    rt_call(c, fn);
-    return RW(2);
+/* an element's drawable shown or hidden */
+static void set_hidden(Ctx *c, u32 element, u32 hide) {
+    u32 o = rd32(c, element + EL_OBJECT);
+    game_method(c, rd32(c, o + 0x10), M_HIDE, o, hide);
 }
-static u32 method(Ctx *c, u32 table, u32 off, u32 a0, u32 a1) { return call(c, rd32(c, table + off), a0, a1); }
 
-static void wrf(Ctx *c, u32 a, float f) { u32 u; memcpy(&u, &f, 4); wr32(c, a, u); }
-static float fl(u32 u) { float f; memcpy(&f, &u, 4); return f; }
+/* a scene node put at (x, y, z) */
+static void place_node(Ctx *c, u32 node, float x, float y, float z) {
+    wr_float(c, node + NODE_POS, x);
+    wr_float(c, node + NODE_POS + 4, y);
+    wr_float(c, node + NODE_POS + 8, z);
+    wr_float(c, node + NODE_POS + 12, 1.0f);
+    wr32(c, node + NODE_FLAGS, rd32(c, node + NODE_FLAGS) | 1);
+    game_call2(c, FN_NODE_UPDATE, node, 0);
+}
 
 /* The strips slide in from one side and out to the other (the place x0: about 12.9 coming in, 0 in
  * place, -13.2 parked out, a strip's length): on a 4:3 screen a parked strip is wholly off it, but its
@@ -93,110 +114,96 @@ static u32 *hidden_of(u32 side) {
 
 /* malloc (0x00100530) of the elements' block */
 void hle_csel_alloc(Ctx *c) {
-    if (RW(31) == 0x0017B1D0 && RW(4) == 0x10 + BASE * ELEM && enabled()) SET32(4, 0x10 + (BASE + NEW) * ELEM);
+    if (RW(31) == RA_CSEL_MALLOC && RW(4) == 0x10 + BASE * ELEM && enabled()) SET32(4, 0x10 + (BASE + NEW) * ELEM);
 }
 
 /* new[] (0x00102580: block, ctor, dtor, size, count) of the elements */
 void hle_csel_array(Ctx *c) {
-    if (RW(31) == 0x0017B1F8 && RW(7) == ELEM && RW(8) == BASE && enabled()) SET32(8, BASE + NEW);
+    if (RW(31) == RA_CSEL_NEW_ARRAY && RW(7) == ELEM && RW(8) == BASE && enabled()) SET32(8, BASE + NEW);
 }
 
 /* 0x00179D80 (side): the border pieces' scale and model */
 void hle_csel_borders_init(Ctx *c) {
     u32 side = RW(4), e = elements(c, side);
     if (!e) return;
-    Saved s;
-    save(c, &s);
-    SET32(29, RW(29) - 0x40);
+    GuestRegs kept;
+    regs_keep(c, &kept);
+    SET32(29, RW(29) - 0x40);                       /* a vector on the game's stack */
     u32 vec = RW(29) + 0x10;
-    wrf(c, vec, fl(0x3F8CCCCD));                    /* 1.1, 0.1833, 1, 1 */
-    wrf(c, vec + 4, fl(0x3E3BBBD5));
-    wrf(c, vec + 8, 1.0f);
-    wrf(c, vec + 12, 1.0f);
-    u32 models = rd32(c, rd32(c, rd32(c, side + 0x40) + 0x18));
+    wr_float(c, vec, as_float(STEP));               /* 1.1, 0.1833, 1, 1 */
+    wr_float(c, vec + 4, as_float(0x3E3BBBD5));
+    wr_float(c, vec + 8, 1.0f);
+    wr_float(c, vec + 12, 1.0f);
+    u32 models = rd32(c, rd32(c, rd32(c, side + SIDE_MODELS) + 0x18));
     for (int bottom = 0; bottom < 2; bottom++)
         for (int n = 0; n < 2 * EXTRA; n++) {
             u32 p = piece(e, bottom, slot(n)), model = models + (bottom ? 0x2300 : 0x22C0);
-            method(c, rd32(c, p + 0x50), 0xC, p, vec);
-            wr32(c, p + 0x14, model);
-            call(c, 0x0014EE30, model, 0);
+            game_method(c, rd32(c, p + EL_VTABLE), M_INIT, p, vec);
+            wr32(c, p + EL_MODEL, model);
+            game_call2(c, FN_MODEL_ATTACH, model, 0);
             wr32(c, rd32(c, p + 0x10) + 0x20, rd32(c, model + 0x10));
-            call(c, 0x0030D620, p, 0);
+            game_call2(c, FN_ELEMENT_ATTACH, p, 0);
         }
-    restore(c, &s);
+    regs_back(c, &kept);
 }
 
 /* 0x00179BF0 (side, f12 = where the strip is): the border pieces' places */
 void hle_csel_borders_place(Ctx *c) {
     u32 e = elements(c, RW(4));
     if (!e) return;
-    Saved s;
-    save(c, &s);
-    float place = F(12), x0 = place - fl(0x40D33334);  /* - 6.6 */
+    GuestRegs kept;
+    regs_keep(c, &kept);
+    float place = F(12), x0 = place - as_float(HALF_STRIP);
     u32 hide_all = *hidden_of(RW(4));
-    for (int k = 0; k < 24; k++) {                  /* the game's pieces: hidden while parked */
-        u32 o = rd32(c, e + (u32)(TOP0 + k) * ELEM);
-        method(c, rd32(c, o + 0x10), 0x1C, o, hide_all || parked(place));
-    }
+    for (u32 k = 0; k < 24; k++)                    /* the game's pieces: hidden while parked */
+        set_hidden(c, e + (TOP0 + k) * ELEM, hide_all || parked(place));
     for (int bottom = 0; bottom < 2; bottom++)
         for (int n = 0; n < 2 * EXTRA; n++) {
             int i = slot(n);
-            u32 o = rd32(c, piece(e, bottom, i));
-            method(c, rd32(c, o + 0x10), 0x1C, o, hide_all || parked(place) || end_out(i, place));
-            u32 node = rd32(c, piece(e, bottom, i) + 4);
-            wrf(c, node + 0xC0, x0 + fl(0x3F8CCCCD) * (float)i);
-            wrf(c, node + 0xC4, fl(bottom ? 0x3EBBBBC2 : 0xBF0CCCD6));      /* 0.3667, -0.55 */
-            wrf(c, node + 0xC8, fl(0xBC23D70A) + fl(0x38D1B717) * (float)i);   /* -0.01 + 0.0001 i */
-            wrf(c, node + 0xCC, 1.0f);
-            wr32(c, node + 0x8C, rd32(c, node + 0x8C) | 1);
-            call(c, 0x002A1E20, node, 0);
+            set_hidden(c, piece(e, bottom, i), hide_all || parked(place) || end_out(i, place));
+            float y = as_float(bottom ? 0x3EBBBBC2 : 0xBF0CCCD6);                        /* 0.3667, -0.55 */
+            float z = as_float(0xBC23D70A) + as_float(0x38D1B717) * (float)i;            /* -0.01 + 0.0001 i */
+            place_node(c, rd32(c, piece(e, bottom, i) + EL_NODE), x0 + as_float(STEP) * (float)i, y, z);
         }
-    restore(c, &s);
+    regs_back(c, &kept);
 }
 
 /* 0x001798C0 (side, f12), replaced: the portraits' places, 12 + 2 * EXTRA of them with the new
  * pieces (as the game's: all hidden, then shown one after the other along the strip) */
 void hle_csel_portraits(Ctx *c) {
-    u32 side = RW(4), e = rd32(c, side + 0x10);
+    u32 side = RW(4), e = rd32(c, side + SIDE_ELEMENTS);
     int more = elements(c, side) ? EXTRA : 0;
     float x0 = F(12);
     u32 p0 = e + PORTRAIT0 * ELEM;
-    for (u32 i = 0; i < 45; i++) {
-        u32 o = rd32(c, p0 + i * ELEM);
-        method(c, rd32(c, o + 0x10), 0x1C, o, 1);
-    }
-    u32 at = call(c, 0x0031EFD0, rd32(c, side + 0x48), (u32)((rd8(c, side + 2) ? -4 : -7) - more));
-    float x = x0 - fl(0x40D33334) - fl(0x3F8CCCCD) * (float)more;
+    for (u32 i = 0; i < NCHARS; i++) set_hidden(c, p0 + i * ELEM, 1);
+    /* from 4 (7 on the other side) characters before the cursor, `more` more with the new pieces */
+    u32 at = game_call2(c, FN_CAROUSEL_AT, rd32(c, side + SIDE_LIST), (u32)((rd8(c, side + 2) ? -4 : -7) - more));
+    float x = x0 - as_float(HALF_STRIP) - as_float(STEP) * (float)more;
     for (int n = 0; n < 12 + 2 * more; n++) {
-        u32 items = rd32(c, rd32(c, side + 0x48) + 0x1C);
+        u32 items = rd32(c, rd32(c, side + SIDE_LIST) + 0x1C);
         s32 id = (s32)rd32(c, items + at * 12 + 8);
-        if (id < 0) id = 44;
-        u32 p = p0 + (u32)id * ELEM, node = rd32(c, p + 4);
-        wrf(c, node + 0xC0, x);
-        wrf(c, node + 0xC4, fl(0xBEBBBBC2));         /* -0.3667 */
-        wrf(c, node + 0xC8, 0.0f);
-        wrf(c, node + 0xCC, 1.0f);
-        wr32(c, node + 0x8C, rd32(c, node + 0x8C) | 1);
-        call(c, 0x002A1E20, node, 0);
-        u32 o = rd32(c, p);
-        if (!end_out(n - more, x0) && !(more && parked(x0))) method(c, rd32(c, o + 0x10), 0x1C, o, 0);
-        at = call(c, 0x0031F0B0, rd32(c, side + 0x48), at);
-        x = fl(0x3F8CCCCD) + x;
+        if (id < 0) id = NCHARS - 1;
+        u32 p = p0 + (u32)id * ELEM;
+        place_node(c, rd32(c, p + EL_NODE), x, as_float(0xBEBBBBC2), 0.0f);       /* y -0.3667 */
+        if (!end_out(n - more, x0) && !(more && parked(x0))) set_hidden(c, p, 0);
+        at = game_call2(c, FN_CAROUSEL_NEXT, rd32(c, side + SIDE_LIST), at);
+        x = as_float(STEP) + x;
     }
 }
 
-/* the new pieces into (add 0x14) or out of (0x18) the scene's draw lists, as the game does its own */
+/* the new pieces into (M_INTO_LIST) or out of (M_OUT_OF_LIST) the scene's draw lists, as the game
+   does its own */
 static void lists(Ctx *c, u32 side, u32 e, u32 op) {
-    rt_log("csel", "side %08X: %d new strip pieces %s the draw lists", side, 4 * EXTRA, op == 0x14 ? "into" : "out of");
+    rt_log("csel", "side %08X: %d new strip pieces %s the draw lists", side, 4 * EXTRA, op == M_INTO_LIST ? "into" : "out of");
     for (int n = 0; n < 2 * EXTRA; n++) {
         u32 top = piece(e, 0, slot(n)), bottom = piece(e, 1, slot(n));
-        int in = call(c, 0x001419B0, rd32(c, top), 0) == 1;
-        if (in != (op == 0x18)) continue;               /* adding what is out, removing what is in */
-        u32 scene = rd32(c, side + 0x3C);
-        u32 layer = method(c, rd32(c, scene + 0xB0), 0x50, scene, 1);
-        method(c, rd32(c, top + 0x50), op, top, layer);
-        layer = method(c, rd32(c, scene + 0xB0), 0x50, scene, 1);
-        method(c, rd32(c, bottom + 0x50), op, bottom, layer);
+        int in = game_call2(c, FN_IN_DRAW_LIST, rd32(c, top), 0) == 1;
+        if (in != (op == M_OUT_OF_LIST)) continue;       /* adding what is out, removing what is in */
+        u32 scene = rd32(c, side + SIDE_SCENE);
+        u32 layer = game_method(c, rd32(c, scene + 0xB0), M_LAYER, scene, 1);
+        game_method(c, rd32(c, top + EL_VTABLE), op, top, layer);
+        layer = game_method(c, rd32(c, scene + 0xB0), M_LAYER, scene, 1);
+        game_method(c, rd32(c, bottom + EL_VTABLE), op, bottom, layer);
     }
 }
 
@@ -204,22 +211,22 @@ static void lists(Ctx *c, u32 side, u32 e, u32 op) {
 void hle_csel_lists(Ctx *c) {
     u32 side = RW(4), e = elements(c, side);
     if (!e) return;
-    Saved s;
-    save(c, &s);
-    lists(c, side, e, 0x14);
-    restore(c, &s);
+    GuestRegs kept;
+    regs_keep(c, &kept);
+    lists(c, side, e, M_INTO_LIST);
+    regs_back(c, &kept);
 }
 
 /* 0x001419B0 (is it in a draw list?): from 0x00177310, the screen closing (s0 = side) takes the
  * top border out of the lists: the new pieces too */
 void hle_csel_closing(Ctx *c) {
-    if (RW(31) != 0x00177318) return;
+    if (RW(31) != RA_CSEL_CLOSING) return;
     u32 side = RW(16), e = elements(c, side);
     if (!e || RW(4) != rd32(c, e + TOP0 * ELEM)) return;    /* the first piece: once */
-    Saved s;
-    save(c, &s);
-    lists(c, side, e, 0x18);
-    restore(c, &s);
+    GuestRegs kept;
+    regs_keep(c, &kept);
+    lists(c, side, e, M_OUT_OF_LIST);
+    regs_back(c, &kept);
 }
 
 /* 0x0017A030 (side, hide, which): which < 0: every element shown or hidden */
@@ -227,14 +234,11 @@ void hle_csel_show(Ctx *c) {
     if ((s32)RW(6) >= 0) return;
     u32 side = RW(4), e = elements(c, side);
     if (!e) return;
-    Saved s;
-    save(c, &s);
-    u32 hide = (RW(5) & 0xFF) || rd8(c, rd32(c, side + 0x28));
+    GuestRegs kept;
+    regs_keep(c, &kept);
+    u32 hide = (RW(5) & 0xFF) || rd8(c, rd32(c, side + SIDE_HIDDEN));
     *hidden_of(side) = hide;
     for (int bottom = 0; bottom < 2; bottom++)
-        for (int n = 0; n < 2 * EXTRA; n++) {
-            u32 o = rd32(c, piece(e, bottom, slot(n)));
-            method(c, rd32(c, o + 0x10), 0x1C, o, hide);
-        }
-    restore(c, &s);
+        for (int n = 0; n < 2 * EXTRA; n++) set_hidden(c, piece(e, bottom, slot(n)), hide);
+    regs_back(c, &kept);
 }

@@ -20,10 +20,9 @@
 #include <string.h>
 #include <time.h>
 
-#include "r5900.h"
-#include "runtime.h"
+#include "hle.h"
 
-#define NAMES 0x004FFCD0u       /* the scene's video names, by its index (+0x40): "DATA/GX_JP.SFD", 0 */
+#define NAMES D_MOVIE_NAMES     /* the scene's video names, by its index (+0x40): "DATA/GX_JP.SFD", 0 */
 #define PAD_START 0x0008
 
 int cdvd_find(const char *path, u32 *lsn, u32 *size);
@@ -290,7 +289,7 @@ void hle_movie_step(Ctx *c) {
     u16 state = rd16(c, s);
     if (state == 0) {
         u32 name_at = rd32(c, NAMES + rd16(c, s + 0x40) * 4);
-        if (!name_at) { rt_call(c, 0x00139AB0); return; }
+        if (!name_at) { rt_call(c, FN_SCENE_END); return; }
         char name[128];
         u32 n = 0;
         while (n < sizeof name - 1 && (name[n] = (char)rd8(c, name_at + n))) n++;
@@ -298,10 +297,10 @@ void hle_movie_step(Ctx *c) {
         movie_start(name);
         wr16(c, s, 1);
     } else if (state == 1) {
-        rt_call(c, 0x00138DE0);                     /* the pad */
+        rt_call(c, FN_PAD_MANAGER);
         SET64(4, RW(2));
         SET64(5, -1);
-        rt_call(c, 0x0013E020);                     /* buttons just pressed */
+        rt_call(c, FN_PAD_PRESSED);
         if (RW(2) & PAD_START) {
             wr8(c, s + 0x48, 1);
             movie_stop();
@@ -311,6 +310,6 @@ void hle_movie_step(Ctx *c) {
         movie_stop();
         wr32(c, s + 0x44, 0);
         SET64(4, s);
-        rt_call(c, 0x00139AB0);
+        rt_call(c, FN_SCENE_END);
     }
 }

@@ -213,6 +213,10 @@ O ee-gcc 2.96 é um binário i386: é preciso suporte a programas de 32 bits.
 
 ## Estrutura
 
+Como as partes se encaixam: [docs/arquitetura.pt-BR.md](docs/arquitetura.pt-BR.md); opções e ferramentas de
+depuração: [docs/depuracao.pt-BR.md](docs/depuracao.pt-BR.md).
+
+
 | Caminho | |
 |---|---|
 | `config/sles_541.62.yaml` | configuração do splat (segmentos, `$gp`) |
@@ -221,7 +225,7 @@ O ee-gcc 2.96 é um binário i386: é preciso suporte a programas de 32 bits.
 | `src/`, `include/` | código decompilado (C++) |
 | `tools/recomp/` | recompilador estático MIPS → C |
 | `port/runtime/`, `port/kernel/` | CPU, memória, timers, syscalls do kernel |
-| `port/iop/`, `port/hle/` | serviços do IOP e funções do SDK substituídas por nativas (lista em `port/hle.txt`) |
+| `port/iop/`, `port/hle/` | serviços do IOP e funções do SDK substituídas por nativas (lista em `port/hle.txt`); `port/hle/game.h` dá nome a cada endereço do jogo usado pelo port |
 | `port/iop/lle/` | módulos do IOP rodando como estão: interpretador MIPS I, carregador de IRX, módulos do sistema nativos, SPU2 |
 | `port/gs/` | DMA, VIF, VU, GS e renderer Vulkan |
 | `tools/fdiff.py` | compila um `.cpp` e compara cada função com o original |

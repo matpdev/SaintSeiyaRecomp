@@ -12,8 +12,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-#include "r5900.h"
-#include "runtime.h"
+#include "hle.h"
 
 static u64 now_ns(void) {
     struct timespec ts;
@@ -25,7 +24,7 @@ int kernel_ntsc(void);
 
 /* u16 frame_lines(void): horizontal blanks (15625 a second, NTSC 15734) since the frame's loaders started */
 void hle_frame_lines(Ctx *c) {
-    u32 frame = rd32(c, 0x00500204);
+    u32 frame = rd32(c, D_FRAME);
     if (!frame) { SET64(2, 0); return; }
     static u32 last_base = ~0u;
     static u64 start;
@@ -44,7 +43,7 @@ void hle_frame_lines(Ctx *c) {
 void hle_video_mode(Ctx *c) {
     static int pal = -1;
     if (pal < 0) pal = getenv("SSTHEH_50HZ") && atoi(getenv("SSTHEH_50HZ"));
-    wr32(c, 0x0050022C, pal ? 2 : 1);
+    wr32(c, D_VIDEO_MODE, pal ? 2 : 1);
 }
 
 /* void set_frame_wait(u8 on) (0x00138B20): scenes set it to finish each frame by waiting for the
@@ -55,7 +54,7 @@ void hle_video_mode(Ctx *c) {
 void hle_set_frame_wait(Ctx *c) {
     static int keep = -1;
     if (keep < 0) keep = getenv("SSTHEH_30FPS_SCENES") && atoi(getenv("SSTHEH_30FPS_SCENES"));
-    u32 app = rd32(c, 0x005000A0);
+    u32 app = rd32(c, D_APP);
     wr8(c, app + 0x20, keep ? (u8)RW(4) : 0);
 }
 
@@ -67,8 +66,8 @@ void cheat_vblank(Ctx *c) {
     static int on = -1;
     if (on < 0) on = getenv("SSTHEH_UNLOCK_ALL") && atoi(getenv("SSTHEH_UNLOCK_ALL"));
     if (!on) return;
-    for (u32 i = 0; i < 0xD4; i++) {
-        u8 v = rd8(c, 0x00539C30 + i);
-        if (!(v & 1)) wr8(c, 0x00539C30 + i, v | 1);
+    for (u32 i = 0; i < D_UNLOCKS_SIZE; i++) {
+        u8 v = rd8(c, D_UNLOCKS + i);
+        if (!(v & 1)) wr8(c, D_UNLOCKS + i, v | 1);
     }
 }

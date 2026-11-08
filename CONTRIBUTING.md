@@ -34,8 +34,10 @@ The goal is C++ that, built with the game's compiler, produces **exactly** the s
 ## Working on the port
 
 - Native code lives in `port/`; the recompiler in `tools/recomp/recomp.py`.
+- Start with [docs/architecture.md](docs/architecture.md) (how the parts fit together) and
+  [docs/debugging.md](docs/debugging.md) (logs, pictures, memory dumps, profiling).
 - To replace a game function with a native one, add its address to `port/hle.txt` and implement it in
-  `port/hle/`.
+  `port/hle/` (include `hle.h`); name the game addresses and offsets it uses in `port/hle/game.h`.
 - Follow the style of the file you are editing (C, short comments explaining the PS2 hardware).
 - Check that the game still reaches the title screen and a fight. `--shot N,M` saves screenshots without a
   window, handy to compare before and after.

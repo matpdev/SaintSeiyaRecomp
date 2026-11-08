@@ -214,6 +214,10 @@ ee-gcc 2.96 is an i386 binary: 32-bit program support is needed.
 
 ## Layout
 
+How the parts fit together: [docs/architecture.md](docs/architecture.md); debugging options and tools:
+[docs/debugging.md](docs/debugging.md).
+
+
 | Path | |
 |---|---|
 | `config/sles_541.62.yaml` | splat configuration (segments, `$gp`) |
@@ -222,7 +226,7 @@ ee-gcc 2.96 is an i386 binary: 32-bit program support is needed.
 | `src/`, `include/` | decompiled code (C++) |
 | `tools/recomp/` | static MIPS → C recompiler |
 | `port/runtime/`, `port/kernel/` | CPU, memory, timers, kernel syscalls |
-| `port/iop/`, `port/hle/` | IOP services and SDK functions replaced by native ones (listed in `port/hle.txt`) |
+| `port/iop/`, `port/hle/` | IOP services and SDK functions replaced by native ones (listed in `port/hle.txt`); `port/hle/game.h` names every game address the port uses |
 | `port/iop/lle/` | IOP modules running as they are: MIPS I interpreter, IRX loader, native system modules, SPU2 |
 | `port/gs/` | DMA, VIF, VU, GS and the Vulkan renderer |
 | `build.sh`, `play.sh`, `tools/disc.py` | build from your ISO, play; disc check |

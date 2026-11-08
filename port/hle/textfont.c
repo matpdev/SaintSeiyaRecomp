@@ -29,8 +29,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "r5900.h"
-#include "runtime.h"
+#include "hle.h"
 #include "platform.h"
 
 #ifdef SSTHEH_FREETYPE
@@ -40,8 +39,8 @@
 
 #define SCALE 4
 #define NGLYPH 1693
-#define TABLE0 0x00418A40u
-#define TABLE1 0x0041A240u
+#define TABLE0 D_CHARS0
+#define TABLE1 D_CHARS1
 #define MAXCANVAS 48
 #define MAXPLACED 512
 #define BASELINE 18.5f                  /* in a 22-pixel glyph box, from its top */
