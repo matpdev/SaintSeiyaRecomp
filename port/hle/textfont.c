@@ -62,7 +62,9 @@ typedef struct {
     Placed *p;                          /* MAXPLACED */
     u64 drawn_key;                      /* the glyphs (and texture size) drawn_idx was drawn for */
     u8 *drawn_idx;                      /* the font's picture as palette indices: a new palette only maps them */
-} Canvas;
+    s32 bx0, by0, bx1, by1;             /* drawn_idx's area in the 4x picture (outside it: index 0) */
+    u64 exp_key, exp_hash;              /* the glyphs (and texture size) exp_hash is for: the hash of the */
+} Canvas;                               /* texels they make (expected()), to find a canvas in a texture at once */
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static Canvas canvas[MAXCANVAS], previous[MAXCANVAS];   /* previous: the text before the last clear */
@@ -292,6 +294,23 @@ static int same(const Canvas *cv, const u8 *e, const u8 *texels, u32 tw, u32 th)
     return 1;
 }
 
+/* a hash of the texture's first `stride` columns */
+static u64 region_hash(const u8 *t, u32 tw, u32 th, u32 stride) {
+    u64 h = 0x9E3779B97F4A7C15ull ^ stride;
+    for (u32 y = 0; y < th; y++) {
+        const u8 *r = t + (size_t)y * tw;
+        u32 x = 0;
+        for (; x + 8 <= stride; x += 8) {
+            u64 w;
+            memcpy(&w, r + x, 8);
+            h = (h ^ w) * 0xFF51AFD7ED558CCDull;
+            h ^= h >> 29;
+        }
+        for (; x < stride; x++) h = (h ^ r[x]) * 0x100000001B3ull;
+    }
+    return h;
+}
+
 #ifdef SSTHEH_FREETYPE
 /* The canvas drawn with the font, SCALE times as large, through the palette (the texture's columns
  * past the canvas: its own texels, enlarged). The game's glyphs are a light core inside a dark rim:
@@ -309,100 +328,186 @@ static u64 glyphs_key(const Canvas *cv, u32 tw, u32 th) {
     return k;
 }
 
-static void draw_idx(const Canvas *cv, u8 *idx, u32 tw, u32 th) {
-    u32 W = tw * SCALE, H = th * SCALE, CW = cv->stride * SCALE;
-    u8 *fill = calloc((size_t)W * H, 1), *col = calloc((size_t)W * H, 1), *raw = calloc((size_t)W * H, 1);
-    for (u32 i = 0; i < cv->n; i++) {
-        const Placed *p = &cv->p[i];
-        s32 bx = (s32)(p->off % cv->stride) * SCALE, by = (s32)(p->off / cv->stride) * SCALE, bw = p->w * SCALE;
-        FT_UInt gi = p->code ? FT_Get_Char_Index(face, p->code) : 0;
-        if (gi && !FT_Load_Glyph(face, gi, FT_LOAD_DEFAULT)) {
-            float adv = (float)face->glyph->advance.x / 64.0f, room = (float)(p->w - 2) * SCALE;
-            float sx = adv > room && adv > 0 ? room / adv : 1.0f;
-            FT_Matrix m = {(FT_Fixed)(sx * 65536.0f), 0, 0, 0x10000};
-            FT_Set_Transform(face, &m, NULL);
-            int bad = FT_Load_Glyph(face, gi, FT_LOAD_RENDER);
-            FT_Set_Transform(face, NULL, NULL);
-            if (bad) continue;
-            FT_GlyphSlot s = face->glyph;
-            s32 ox = bx + (bw - (s32)(s->advance.x >> 6)) / 2 + s->bitmap_left;
-            s32 oy = by + (s32)(BASELINE * SCALE) - s->bitmap_top;
-            for (u32 r = 0; r < s->bitmap.rows; r++)
-                for (u32 q = 0; q < s->bitmap.width; q++) {
-                    s32 X = ox + (s32)q, Y = oy + (s32)r;
-                    if (X < 0 || Y < 0 || X >= (s32)CW || Y >= (s32)H) continue;
-                    u8 v = s->bitmap.buffer[r * (u32)s->bitmap.pitch + q];
-                    u32 o = (u32)Y * W + (u32)X;
-                    if (v > fill[o]) { fill[o] = v; col[o] = p->colour; }
-                }
-        } else {                                               /* not in the font: the game's glyph, enlarged */
-            for (u32 r = 0; r < (u32)p->h * SCALE; r++)
-                for (u32 q = 0; q < (u32)bw; q++) {
-                    u32 sx = q / SCALE, sy = r / SCALE;
-                    u8 v = (p->px[sy * (p->w / 2) + sx / 2] >> ((sx & 1) * 4)) & 15;
-                    u32 o = (u32)(by + (s32)r) * W + (u32)(bx + (s32)q);
-                    if (v > raw[o]) { raw[o] = v; col[o] = p->colour; }
-                }
-        }
-    }
-    /* the rim: the coverage spread over a disc of RIM pixels */
-    u8 *rim = calloc((size_t)W * H, 1);
+/* One character drawn with the font for a box w texels wide, kept for the next texts (a text that
+   changes a letter at a time, or comes back, is put together from these): the coverage (fill) and
+   the coverage spread over a disc of RIM pixels (rim; spreading each glyph and keeping the largest
+   is the same as spreading their union), SCALE times as large, at (ox, oy) from the box's top left. */
+typedef struct {
+    u32 key;                            /* character | box width << 16; 0: free */
+    s32 ox, oy;
+    u32 w, h;
+    u8 *fill, *rim;                     /* NULL: not in the font (the game's glyph is used) */
+} Tile;
+#define NTILE 1024
+static Tile tiles[NTILE];
+
+static const Tile *tile_for(u16 code, u16 box_w) {
+    u32 key = code | (u32)box_w << 16;
+    Tile *t = &tiles[(key * 2654435761u) >> 22];
+    if (t->key == key) return t;
+    free(t->fill);
+    free(t->rim);
+    memset(t, 0, sizeof *t);
+    t->key = key;
+    FT_UInt gi = code ? FT_Get_Char_Index(face, code) : 0;
+    if (!gi || FT_Load_Glyph(face, gi, FT_LOAD_DEFAULT)) return t;
+    float adv = (float)face->glyph->advance.x / 64.0f, room = (float)(box_w - 2) * SCALE;
+    float sx = adv > room && adv > 0 ? room / adv : 1.0f;
+    FT_Matrix m = {(FT_Fixed)(sx * 65536.0f), 0, 0, 0x10000};
+    FT_Set_Transform(face, &m, NULL);
+    int bad = FT_Load_Glyph(face, gi, FT_LOAD_RENDER);
+    FT_Set_Transform(face, NULL, NULL);
+    if (bad) return t;
+    FT_GlyphSlot g = face->glyph;
+    s32 bw = box_w * SCALE;
+    t->ox = (bw - (s32)(g->advance.x >> 6)) / 2 + g->bitmap_left - RIM;
+    t->oy = (s32)(BASELINE * SCALE) - g->bitmap_top - RIM;
+    t->w = g->bitmap.width + 2 * RIM;
+    t->h = g->bitmap.rows + 2 * RIM;
+    t->fill = calloc((size_t)t->w * t->h, 1);
+    t->rim = calloc((size_t)t->w * t->h, 1);
+    for (u32 r = 0; r < g->bitmap.rows; r++)
+        memcpy(t->fill + (r + RIM) * t->w + RIM, g->bitmap.buffer + r * (u32)g->bitmap.pitch, g->bitmap.width);
     static s32 disc[(2 * RIM + 1) * (2 * RIM + 1)][2];
     static int nd;
     if (!nd)
         for (s32 dy = -RIM; dy <= RIM; dy++)
             for (s32 dx = -RIM; dx <= RIM; dx++)
                 if (dx * dx + dy * dy <= RIM * RIM) { disc[nd][0] = dx; disc[nd][1] = dy; nd++; }
-    for (u32 Y = 0; Y < H; Y++)
-        for (u32 X = 0; X < CW; X++) {
-            u8 v = fill[Y * W + X];
+    u32 W = t->w;
+    for (u32 Y = RIM; Y + RIM < t->h; Y++)
+        for (u32 X = RIM; X + RIM < W; X++) {
+            u8 v = t->fill[Y * W + X];
             if (!v) continue;
-            if (v == 255 && X > 0 && Y > 0 && X + 1 < CW && Y + 1 < H && fill[Y * W + X - 1] == 255 && fill[Y * W + X + 1] == 255 &&
-                fill[(Y - 1) * W + X] == 255 && fill[(Y + 1) * W + X] == 255) continue;    /* inside: its edges spread as far */
+            if (v == 255 && t->fill[Y * W + X - 1] == 255 && t->fill[Y * W + X + 1] == 255 &&
+                t->fill[(Y - 1) * W + X] == 255 && t->fill[(Y + 1) * W + X] == 255) continue;   /* inside: its edges spread as far */
             for (int k = 0; k < nd; k++) {
-                s32 x = (s32)X + disc[k][0], y = (s32)Y + disc[k][1];
-                if (x < 0 || y < 0 || x >= (s32)CW || y >= (s32)H) continue;
-                u32 o = (u32)y * W + (u32)x;
-                if (v > rim[o]) { rim[o] = v; if (!fill[o] && !raw[o]) col[o] = col[Y * W + X]; }
+                u32 o = (Y + (u32)disc[k][1]) * W + X + (u32)disc[k][0];
+                if (v > t->rim[o]) t->rim[o] = v;
             }
         }
-    for (u32 Y = 0; Y < H; Y++)
-        for (u32 X = 0; X < CW; X++) {
-            u32 o = Y * W + X, v;
-            if (raw[o]) v = raw[o];
-            else if (fill[o]) v = 3 + (fill[o] * 12 + 127) / 255;
-            else v = (rim[o] * 3 + 127) / 255;
-            idx[o] = (u8)(v ? (col[o] << 4) | v : 0);
+    return t;
+}
+
+/* The canvas's glyphs drawn with the font into cv->drawn_idx (palette indices), over the area they
+   may touch (cv->bx0..): the core 3..15 from the coverage, the rim 1..3 from the spread coverage. */
+static void draw_idx(Canvas *cv, u32 tw, u32 th) {
+    s32 H = (s32)(th * SCALE), CW = (s32)(cv->stride * SCALE), M = 12 * SCALE;   /* M: how far a glyph may leave its box */
+    s32 x0 = CW, y0 = H, x1 = 0, y1 = 0;
+    for (u32 i = 0; i < cv->n; i++) {
+        const Placed *p = &cv->p[i];
+        s32 bx = (s32)(p->off % cv->stride) * SCALE, by = (s32)(p->off / cv->stride) * SCALE;
+        if (bx - M < x0) x0 = bx - M;
+        if (by - M < y0) y0 = by - M;
+        if (bx + p->w * SCALE + M > x1) x1 = bx + p->w * SCALE + M;
+        if (by + p->h * SCALE + M > y1) y1 = by + p->h * SCALE + M;
+    }
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > CW) x1 = CW;
+    if (y1 > H) y1 = H;
+    if (x1 < x0) x1 = x0;
+    if (y1 < y0) y1 = y0;
+    s32 BW = x1 - x0, BH = y1 - y0;
+    size_t n = (size_t)BW * BH;
+    u8 *fill = calloc(n ? n : 1, 1), *col = calloc(n ? n : 1, 1), *raw = calloc(n ? n : 1, 1),
+       *rim = calloc(n ? n : 1, 1), *rcol = calloc(n ? n : 1, 1);
+    for (u32 i = 0; i < cv->n; i++) {
+        const Placed *p = &cv->p[i];
+        s32 bx = (s32)(p->off % cv->stride) * SCALE - x0, by = (s32)(p->off / cv->stride) * SCALE - y0, bw = p->w * SCALE;
+        const Tile *t = tile_for(p->code, p->w);
+        if (t->fill) {
+            for (u32 r = 0; r < t->h; r++) {
+                s32 Y = by + t->oy + (s32)r;
+                if (Y < 0 || Y >= BH) continue;
+                for (u32 q = 0; q < t->w; q++) {
+                    s32 X = bx + t->ox + (s32)q;
+                    if (X < 0 || X >= BW) continue;
+                    u32 o = (u32)Y * (u32)BW + (u32)X;
+                    u8 f = t->fill[r * t->w + q], g = t->rim[r * t->w + q];
+                    if (f > fill[o]) { fill[o] = f; col[o] = p->colour; }
+                    if (g > rim[o]) { rim[o] = g; rcol[o] = p->colour; }
+                }
+            }
+        } else {                                               /* not in the font: the game's glyph, enlarged */
+            for (u32 r = 0; r < (u32)p->h * SCALE; r++)
+                for (u32 q = 0; q < (u32)bw; q++) {
+                    s32 X = bx + (s32)q, Y = by + (s32)r;
+                    if (X < 0 || Y < 0 || X >= BW || Y >= BH) continue;
+                    u32 sx = q / SCALE, sy = r / SCALE;
+                    u8 v = (p->px[sy * (p->w / 2) + sx / 2] >> ((sx & 1) * 4)) & 15;
+                    u32 o = (u32)Y * (u32)BW + (u32)X;
+                    if (v > raw[o]) { raw[o] = v; col[o] = p->colour; }
+                }
         }
+    }
+    free(cv->drawn_idx);
+    cv->drawn_idx = malloc(n ? n : 1);
+    for (size_t o = 0; o < n; o++) {
+        u32 v, c = col[o];
+        if (raw[o]) v = raw[o];
+        else if (fill[o]) v = 3 + (fill[o] * 12 + 127) / 255;
+        else { v = (rim[o] * 3 + 127) / 255; c = rcol[o]; }
+        cv->drawn_idx[o] = (u8)(v ? (c << 4) | v : 0);
+    }
+    cv->bx0 = x0; cv->by0 = y0; cv->bx1 = x1; cv->by1 = y1;
     free(fill);
     free(col);
     free(raw);
     free(rim);
+    free(rcol);
 }
 
-/* the font's picture through the palette (drawn once per text, kept with the canvas) */
-static u32 *draw(Canvas *cv, const u8 *texels, u32 tw, u32 th, const u32 *pal) {
+/* the font's picture through the palette (the glyphs drawn once per text, kept with the canvas; a new
+   palette, as in a fade, only maps their area). When the canvas is the texture's whole width, only
+   the glyphs' area is made (rect: x, y, w, h), the rest being palette colour 0 (*fill): a 512x256
+   text is 8 MB at 4x, most of it see-through. */
+static u32 *draw(Canvas *cv, const u8 *texels, u32 tw, u32 th, const u32 *pal, u32 *rect, u32 *fill) {
     u32 W = tw * SCALE, H = th * SCALE, CW = cv->stride * SCALE;
     u64 key = glyphs_key(cv, tw, th);
     if (!cv->drawn_idx || cv->drawn_key != key) {
-        free(cv->drawn_idx);
-        cv->drawn_idx = calloc((size_t)W * H, 1);
-        draw_idx(cv, cv->drawn_idx, tw, th);
+        draw_idx(cv, tw, th);
         cv->drawn_key = key;
     }
+    u32 p0 = pal[0];
+    u32 bx0 = (u32)cv->bx0, bx1 = (u32)cv->bx1, by0 = (u32)cv->by0, by1 = (u32)cv->by1, BW = bx1 - bx0, BH = by1 - by0;
+    if (CW == W) {
+        if (!BW || !BH) { bx0 = by0 = 0; BW = BH = 1; }
+        u32 *out = malloc((size_t)BW * BH * 4);
+        for (u32 Y = 0; Y < BH; Y++) {
+            const u8 *ix = cv->drawn_idx + (size_t)Y * BW;
+            u32 *row = out + (size_t)Y * BW;
+            if (cv->bx1 > cv->bx0) for (u32 X = 0; X < BW; X++) row[X] = pal[ix[X]];
+            else row[0] = p0;
+        }
+        rect[0] = bx0; rect[1] = by0; rect[2] = BW; rect[3] = BH;
+        *fill = p0;
+        return out;
+    }
     u32 *out = malloc((size_t)W * H * 4);
-    for (u32 Y = 0; Y < H; Y++)
-        for (u32 X = 0; X < W; X++)
-            out[Y * W + X] = X < CW ? pal[cv->drawn_idx[Y * W + X]] : pal[texels[(Y / SCALE) * tw + X / SCALE]];
+    for (u32 Y = 0; Y < H; Y++) {
+        u32 *row = out + (size_t)Y * W;
+        if (Y >= by0 && Y < by1) {
+            const u8 *ix = cv->drawn_idx + (size_t)(Y - by0) * BW;
+            for (u32 X = 0; X < bx0; X++) row[X] = p0;
+            for (u32 X = 0; X < BW; X++) row[bx0 + X] = pal[ix[X]];
+            for (u32 X = bx1; X < CW; X++) row[X] = p0;
+        } else
+            for (u32 X = 0; X < CW; X++) row[X] = p0;
+        for (u32 X = CW; X < W; X++) row[X] = pal[texels[(Y / SCALE) * tw + X / SCALE]];
+    }
+    rect[2] = 0;                                                /* all of it */
     return out;
 }
 #endif
 
-/* gs.c, decoding an 8-bit texture (texels tw x th, palette of 256): the font's picture, or NULL */
-u32 *textfont_replace(const u8 *texels, u32 tw, u32 th, const u32 *pal, u32 *w_out, u32 *h_out) {
+/* gs.c, decoding an 8-bit texture (texels tw x th, palette of 256): the font's picture, or NULL (rect[2]
+   not 0: only rect (x, y, w, h) of it, the rest *fill) */
+u32 *textfont_replace(const u8 *texels, u32 tw, u32 th, const u32 *pal, u32 *w_out, u32 *h_out, u32 *rect, u32 *fill) {
 #ifdef SSTHEH_FREETYPE
     if (!textfont_active() || !font_open()) return NULL;
-    u32 *out = NULL;
+    u32 *out = NULL, strides[4], nstrides = 0;
+    u64 hashes[4];
     u8 *e = malloc((size_t)tw * th);
     pthread_mutex_lock(&lock);
     for (int k = 0; k < 2 * MAXCANVAS && !out; k++) {
@@ -410,13 +515,29 @@ u32 *textfont_replace(const u8 *texels, u32 tw, u32 th, const u32 *pal, u32 *w_o
         if (debug && cv->buf && cv->n) rt_log("font", "texture %ux%u vs canvas %08X stride %u, %u glyphs: %s", tw, th, cv->buf, cv->stride, cv->n,
                                               fits(cv, tw, th) ? "fits" : "doesn't fit");
         if (!fits(cv, tw, th)) continue;
-        expected(cv, e, tw, th);
+        u64 ek = glyphs_key(cv, tw, th);
+        if (cv->exp_key != ek) {
+            expected(cv, e, tw, th);
+            cv->exp_hash = region_hash(e, tw, th, cv->stride);
+            cv->exp_key = ek;
+        }
+        int sk = 0;                                             /* the texture's hash for this stride, once */
+        while (sk < nstrides && strides[sk] != cv->stride) sk++;
+        if (sk == nstrides) {
+            if (nstrides == 4) sk = 3;
+            else nstrides++;
+            strides[sk] = cv->stride;
+            hashes[sk] = region_hash(texels, tw, th, cv->stride);
+        }
+        if (hashes[sk] != cv->exp_hash) continue;
         if (debug) {
+            expected(cv, e, tw, th);
             u32 diff = 0;
             for (u32 y = 0; y < th; y++)
                 for (u32 x = 0; x < cv->stride; x++) diff += e[y * tw + x] != texels[y * tw + x];
             rt_log("font", "  %u texels differ", diff);
         }
+        expected(cv, e, tw, th);                                /* (a hash isn't proof) */
         if (!same(cv, e, texels, tw, th)) continue;
         if (debug)
             for (int r = 0; r < 2; r++)
@@ -425,7 +546,7 @@ u32 *textfont_replace(const u8 *texels, u32 tw, u32 th, const u32 *pal, u32 *w_o
                        pal[r*16+9], pal[r*16+10], pal[r*16+11], pal[r*16+12], pal[r*16+13], pal[r*16+14], pal[r*16+15]);
         struct timespec t0, t1;
         clock_gettime(CLOCK_MONOTONIC, &t0);
-        out = draw(cv, texels, tw, th, pal);
+        out = draw(cv, texels, tw, th, pal, rect, fill);
         clock_gettime(CLOCK_MONOTONIC, &t1);
         if (debug) rt_log("font", "text of %u glyphs drawn (%ux%u) in %.1f ms", cv->n, tw * SCALE, th * SCALE,
                           (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6);
@@ -435,7 +556,7 @@ u32 *textfont_replace(const u8 *texels, u32 tw, u32 th, const u32 *pal, u32 *w_o
     if (out) { *w_out = tw * SCALE; *h_out = th * SCALE; }
     return out;
 #else
-    (void)texels; (void)tw; (void)th; (void)pal; (void)w_out; (void)h_out;
+    (void)texels; (void)tw; (void)th; (void)pal; (void)w_out; (void)h_out; (void)rect; (void)fill;
     return NULL;
 #endif
 }

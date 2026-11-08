@@ -764,7 +764,7 @@ static void texels8(u8 *out, u32 tbp, u32 tbw, u32 tw, u32 th) {
 }
 
 int textfont_active(void);                                      /* port/hle/textfont.c */
-u32 *textfont_replace(const u8 *texels, u32 tw, u32 th, const u32 *pal, u32 *w_out, u32 *h_out);
+u32 *textfont_replace(const u8 *texels, u32 tw, u32 th, const u32 *pal, u32 *w_out, u32 *h_out, u32 *rect, u32 *fill);
 
 /* The texture at tbp as RGBA (tw x th), as texel() reads it: the palette expanded once, the
  * buffer's row worked out once per line. */
@@ -875,13 +875,13 @@ static s32 texture_for(int ctx, u32 *w_out, u32 *h_out) {
            the original's size in texels) */
         u64 name = texpack_name(px, tw, th);
         texpack_dump(name, px, tw, th);
-        u32 uw = tw, uh = th, *rp = texpack_find(name, &uw, &uh);
+        u32 uw = tw, uh = th, *rp = texpack_find(name, &uw, &uh), rect[4] = {0, 0, 0, 0}, fill = 0;
         if (!rp && psm == 0x13 && textfont_active()) {      /* a text the game wrote: drawn with the font file */
             u8 *ix = malloc((size_t)tw * th);
             u32 pal[256];
             texels8(ix, tbp, tbw, tw, th);
             palette8(pal, cbp, cpsm);
-            rp = textfont_replace(ix, tw, th, pal, &uw, &uh);
+            rp = textfont_replace(ix, tw, th, pal, &uw, &uh, rect, &fill);
             free(ix);
         }
         tex_ents[idx].plain = 1;                 /* every texel within a few levels of the first */
@@ -900,7 +900,7 @@ static s32 texture_for(int ctx, u32 *w_out, u32 *h_out) {
         memcpy(tex_ents[idx].ckey, ckey, sizeof ckey);
         *cs = idx;
         GROW(rec->uploads, rec->nuploads, rec->cap_uploads, GpuTexUpload);
-        rec->uploads[rec->nuploads++] = (GpuTexUpload){idx, uw, uh, px};
+        rec->uploads[rec->nuploads++] = (GpuTexUpload){idx, uw, uh, px, rect[0], rect[1], rect[2], rect[3], fill};
     }
     tex_ents[idx].last = rec_frame;
     memcpy(f->key, key, sizeof key);

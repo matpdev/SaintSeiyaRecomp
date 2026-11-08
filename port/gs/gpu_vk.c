@@ -48,7 +48,7 @@ typedef struct { u32 key; SDL_GPUTexture *tex; int sides; } Target;   /* sides: 
 static Target colors[MAX_RT], depths[MAX_RT];
 static int ncolors, ndepths;
 
-typedef struct { u32 id; SDL_GPUTexture *tex; u32 last_used; u32 w, h; } Tex;
+typedef struct { u32 id; SDL_GPUTexture *tex; u32 last_used; u32 w, h; int target; } Tex;   /* target: can be cleared */
 static Tex texs[MAX_TEX];
 static u32 frame_no;
 
@@ -476,16 +476,40 @@ static void upload_verts(SDL_GPUCommandBuffer *cmd, GpuFrame *f, const GpuVertex
 void gpu_upload(GpuFrame *f) {
     if (!dev || !f) return;
     SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(dev);
-    SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
     for (u32 i = 0; i < f->nfrees; i++) {
         Tex *t = tex_slot(f->frees[i]);
         if (t->tex) SDL_ReleaseGPUTexture(dev, t->tex);
         t->tex = NULL;
         t->id = 0;
     }
-    /* all the frame's textures through one transfer buffer */
+    /* the textures; those sent in part are first cleared to the colour of the rest */
     u64 total = 0;
-    for (u32 i = 0; i < f->nuploads; i++) total += (u64)f->uploads[i].w * f->uploads[i].h * 4;
+    for (u32 i = 0; i < f->nuploads; i++) {
+        GpuTexUpload *u = &f->uploads[i];
+        Tex *t = tex_slot(u->id);
+        int part = u->pw != 0;
+        if (t->tex && (t->w != u->w || t->h != u->h || (part && !t->target))) { SDL_ReleaseGPUTexture(dev, t->tex); t->tex = NULL; }
+        t->id = u->id;
+        t->w = u->w;
+        t->h = u->h;
+        if (!t->tex) {
+            t->target = part;
+            t->tex = texture(u->w, u->h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+                             SDL_GPU_TEXTUREUSAGE_SAMPLER | (part ? SDL_GPU_TEXTUREUSAGE_COLOR_TARGET : 0));
+        }
+        if (part) {
+            SDL_GPUColorTargetInfo ci = {0};
+            ci.texture = t->tex;
+            ci.load_op = SDL_GPU_LOADOP_CLEAR;
+            ci.store_op = SDL_GPU_STOREOP_STORE;
+            ci.clear_color = (SDL_FColor){(u->fill & 0xFF) / 255.0f, ((u->fill >> 8) & 0xFF) / 255.0f,
+                                          ((u->fill >> 16) & 0xFF) / 255.0f, (u->fill >> 24) / 255.0f};
+            SDL_EndGPURenderPass(SDL_BeginGPURenderPass(cmd, &ci, 1, NULL));
+        }
+        total += (u64)(part ? u->pw * u->ph : u->w * u->h) * 4;
+    }
+    SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
+    /* all the frame's textures through one transfer buffer */
     if (total > txfer_size) {
         if (txfer) SDL_ReleaseGPUTransferBuffer(dev, txfer);
         txfer_size = (u32)(total + total / 2);
@@ -499,20 +523,19 @@ void gpu_upload(GpuFrame *f) {
     for (u32 i = 0; i < f->nuploads; i++) {
         GpuTexUpload *u = &f->uploads[i];
         Tex *t = tex_slot(u->id);
-        if (t->tex && (t->w != u->w || t->h != u->h)) { SDL_ReleaseGPUTexture(dev, t->tex); t->tex = NULL; }
-        t->id = u->id;
-        t->w = u->w;
-        t->h = u->h;
-        if (!t->tex) t->tex = texture(u->w, u->h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
-        u32 bytes = u->w * u->h * 4;
+        u32 x = u->pw ? u->x : 0, y = u->pw ? u->y : 0, w = u->pw ? u->pw : u->w, h = u->pw ? u->ph : u->h;
+        u32 bytes = w * h * 4;
         up_bytes += bytes;
         up_count++;
+        if (!bytes) continue;
         memcpy(map + off, u->px, bytes);
-        SDL_GPUTextureTransferInfo src = {txfer, off, u->w, u->h};
+        SDL_GPUTextureTransferInfo src = {txfer, off, w, h};
         SDL_GPUTextureRegion dst = {0};
         dst.texture = t->tex;
-        dst.w = u->w;
-        dst.h = u->h;
+        dst.x = x;
+        dst.y = y;
+        dst.w = w;
+        dst.h = h;
         dst.d = 1;
         SDL_UploadToGPUTexture(cp, &src, &dst, false);
         off += bytes;

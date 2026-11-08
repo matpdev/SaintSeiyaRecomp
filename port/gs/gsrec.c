@@ -106,7 +106,10 @@ static u64 hash_frame(u64 h, const GpuFrame *f) {
         h = fnv(h, &u->id, sizeof u->id);
         h = fnv(h, &u->w, sizeof u->w);
         h = fnv(h, &u->h, sizeof u->h);
-        h = fnv(h, u->px, (size_t)u->w * u->h * 4);
+        if (u->pw) {
+            h = fnv(h, &u->x, 5 * sizeof u->x);
+            h = fnv(h, u->px, (size_t)u->pw * u->ph * 4);
+        } else h = fnv(h, u->px, (size_t)u->w * u->h * 4);
     }
     return fnv(h, f->frees, (size_t)f->nfrees * sizeof *f->frees);
 }

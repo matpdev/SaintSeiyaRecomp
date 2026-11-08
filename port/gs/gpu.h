@@ -43,7 +43,9 @@ typedef struct {
 typedef struct {
     u32 id;                     /* texture index, 1..GPU_MAX_TEX-1 */
     u32 w, h;
-    u32 *px;                    /* RGBA, alpha in GS units (0x80 = 1.0) */
+    u32 *px;                    /* RGBA, alpha in GS units (0x80 = 1.0): pw x ph texels at (x, y) */
+    u32 x, y, pw, ph;           /* pw = 0: all of it (w x h) */
+    u32 fill;                   /* with pw: the colour of the rest (a text's 4x picture: mostly see-through) */
 } GpuTexUpload;
 
 typedef struct {
