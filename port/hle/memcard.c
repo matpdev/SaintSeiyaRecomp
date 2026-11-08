@@ -256,8 +256,7 @@ void hle_mc2_getdir(Ctx *c) {               /* socket, pattern, offset, max, ent
         if (n >= max) break;
         char p[PATH_MAX];
         struct stat st;
-        snprintf(p, sizeof p, "%s/%s", dir, de->d_name);
-        if (stat(p, &st)) continue;
+        if (snprintf(p, sizeof p, "%s/%s", dir, de->d_name) >= (int)sizeof p || stat(p, &st)) continue;
         if (out) put_entry(c, out + n * 0x38, p, de->d_name, &st);
         n++;
     }

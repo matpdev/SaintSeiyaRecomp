@@ -69,7 +69,9 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static Canvas canvas[MAXCANVAS], previous[MAXCANVAS];   /* previous: the text before the last clear */
 static u32 stamp;
 static int state = -1;                  /* -1 not decided, 0 off, 1 on */
+#ifdef SSTHEH_FREETYPE
 static char font_path[1024];
+#endif
 
 static int debug = -1;
 static u16 code_of[NGLYPH];             /* glyph -> character, 0: none */
@@ -77,6 +79,7 @@ static u32 font_base;                   /* FONT.BIN in the EE's memory */
 
 /* ---------------------------------------------------------------------------------- set-up */
 
+#ifdef SSTHEH_FREETYPE
 static int has_ext(const char *n, const char *e) {
     size_t a = strlen(n), b = strlen(e);
     return a > b && !strcasecmp(n + a - b, e);
@@ -95,6 +98,7 @@ static int font_in(const char *dir) {
     snprintf(font_path, sizeof font_path, "%s/%s", dir, best);
     return 1;
 }
+#endif
 
 /* The font file: SSTHEH_FONT, else ~/.local/share/sstheh/fonts/, else fonts/ next to the program
  * (a release) or one folder up (build/sstheh in the repository). */
@@ -261,6 +265,7 @@ static int font_open(void) {
 }
 #endif
 
+#ifdef SSTHEH_FREETYPE
 /* The canvas's texels as the game would have written them, in a texture tw x th: the canvas's rows
  * (stride texels) are the texture's first columns (a 448-texel canvas in a 512-texel texture). */
 static void expected(const Canvas *cv, u8 *e, u32 tw, u32 th) {
@@ -308,6 +313,7 @@ static u64 region_hash(const u8 *t, u32 tw, u32 th, u32 stride) {
     }
     return h;
 }
+#endif
 
 #ifdef SSTHEH_FREETYPE
 /* The canvas drawn with the font, SCALE times as large, through the palette (the texture's columns

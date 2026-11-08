@@ -479,6 +479,7 @@ void rt_syscall(Ctx *c, u32 pc) {
         leave_cpu();
         pthread_mutex_unlock(&big);
         pthread_exit(NULL);
+        break;                                                  /* (not reached) */
     }
     case 0x25: case 0x26: if (a0 < MAX_THREADS) threads[a0].state = T_DORMANT; break;           /* TerminateThread */
     case 0x29: case 0x2A: {                                     /* (i)ChangeThreadPriority(id, prio) */

@@ -1,0 +1,49 @@
+# What can be built without the game, on every push and pull request (tools/ci_check.sh): the port's
+# own code for Linux and Windows (warnings are errors), the setup, the Python tools. The game's code is
+# generated from the player's disc, so the release packages are made on a machine with the game
+# (tools/publish.sh); nothing from the game ever goes through here.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Tools and libraries
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git ca-certificates gcc g++ ninja-build pkg-config python3 cmake glslc \
+            libsdl3-dev libavformat-dev libavcodec-dev libswscale-dev libswresample-dev libfreetype-dev \
+            qt6-base-dev libgl-dev libvulkan-dev
+      - uses: actions/checkout@v4
+      - name: Port (gcc) and setup (Qt)
+        run: tools/ci_check.sh linux
+      - name: Python tools
+        run: tools/ci_check.sh python
+
+  windows:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git ca-certificates gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 cmake make curl unzip xz-utils \
+            python3 glslc
+      - uses: actions/checkout@v4
+      - name: Downloads cache (SDL3, FFmpeg, FreeType sources)
+        uses: actions/cache@v4
+        with:
+          path: tools/win/dl
+          key: win-deps-${{ hashFiles('tools/win_deps.sh') }}
+      - name: Windows libraries (tools/win_deps.sh)
+        run: sh tools/win_deps.sh
+      - name: Port (MinGW-w64)
+        run: tools/ci_check.sh windows

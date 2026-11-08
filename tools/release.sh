@@ -60,7 +60,8 @@ This release contains, unmodified and dynamically linked:
 - libc++ and libunwind from LLVM (Apache 2.0 with LLVM exception), as Qt's llvm-mingw build needs them.
 - winpthreads from MinGW-w64 (MIT-style, see MinGW-w64-runtime.txt).
 The font the setup downloads, M PLUS Rounded 1c, is under the SIL Open Font License 1.1 (OFL-1.1.txt).
-Nothing from the game Saint Seiya: The Hades is included: the setup uses your own disc image.
+No data of the game Saint Seiya: The Hades is included (disc image, models, textures, sounds): the setup uses
+your own disc image.
 EOF
     sed 's/$/\r/' > "$D/LEIAME - README.txt" <<EOF
 Saint Seiya: The Hades - PC Port ($VERSION)

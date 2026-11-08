@@ -3,8 +3,9 @@
 **English** · [Português](README.pt-BR.md)
 
 [![Listed on PlayPorted](https://playported.com/badge.svg)](https://playported.com/ports/1243-saint-seiya-the-hades/)
+[![CI](https://github.com/matpdev/SaintSeiyaRecomp/actions/workflows/ci.yml/badge.svg)](https://github.com/matpdev/SaintSeiyaRecomp/actions/workflows/ci.yml)
 
-A native PC (Linux) port of **Saint Seiya: The Hades** (PS2, Europe, SLES-54162), made by static
+A native PC (Linux and Windows) port of **Saint Seiya: The Hades** (PS2, Europe, SLES-54162), made by static
 recompilation, with a matching decompilation moving forward alongside it. Modelled on
 [Tenkaichi3Decomp](https://github.com/z3xox/Tenkaichi3Decomp).
 
@@ -35,7 +36,7 @@ controller and memory card.
 | Extras | a training mode the original doesn't have (F5: idle opponent, infinite life, damage and inputs on screen); a second gamepad plays as player 2 |
 | Decompilation | compiler identified (Metrowerks CodeWarrior PS2 3.0.1, `-O3`, C++), 327 library functions named; no game function decompiled yet |
 | Memory card | slot 1 is a folder (`~/.local/share/sstheh/memcard1`): the game saves and loads normally |
-| Missing | full playthrough testing, Windows/macOS |
+| Missing | full playthrough testing, macOS; the Windows build is tested with Wine only so far |
 
 Details in [`docs/roadmap.md`](docs/roadmap.md) and [`docs/recon.md`](docs/recon.md).
 
@@ -44,6 +45,10 @@ Details in [`docs/roadmap.md`](docs/roadmap.md) and [`docs/recon.md`](docs/recon
 You need **your own copy** of the game: Saint Seiya: The Hades, **European release (SLES-54162)**. Nothing from
 the game is in this repository. The Brazilian fan translation is a different build (SjCRUNCH-compressed) and
 does not work.
+
+**Ready to play:** the [releases](https://github.com/matpdev/SaintSeiyaRecomp/releases) have a Windows zip and a Linux
+AppImage. Open the setup (`SaintSeiyaDecomp-setup.exe`, or the AppImage), choose your ISO, and play: nothing to
+build. To build it yourself instead:
 
 ### 1. Requirements (Linux x86-64)
 
@@ -107,6 +112,14 @@ the libraries' licenses). On Windows the settings and the memory card are in `%A
 setup and the libraries the two need. The first time it opens the setup (`--setup` opens it again); the disc
 image, the font and the settings go to `~/.local/share/sstheh`, where the game looks for them. Built with Debian's
 SDL 3.2, the AppImage has no texture packs (PNG needs SDL 3.4).
+
+### Checks and releases
+
+Every push runs [CI](.github/workflows/ci.yml) on GitHub: the port's own code compiled for Linux and Windows
+(warnings are errors), the setup, the Python tools (`tools/ci_check.sh linux|windows|python` does the same
+locally). The game's code is generated from the disc, so the release packages are made on a machine with the
+game: `tools/publish.sh vX.Y.Z [--draft]` builds both, tags the commit and creates the GitHub release (needs the
+GitHub CLI logged in). Nothing from the game goes through GitHub.
 
 ### The release's setup
 

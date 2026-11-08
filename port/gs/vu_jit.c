@@ -91,7 +91,10 @@ static u32 code_hash_gen;
 static u64 code_hash;
 static u64 header_hash;         /* of the headers and flags the programs are compiled with: part of the keys */
 static int enabled = -1;
-static char src_dir[PATH_MAX], cache_dir[PATH_MAX];
+static char cache_dir[PATH_MAX];
+#ifndef _WIN32
+static char src_dir[PATH_MAX];     /* the sources next to the executable (build/..): what programs are compiled with */
+#endif
 
 static pthread_mutex_t qlock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t qcond = PTHREAD_COND_INITIALIZER;
@@ -894,8 +897,6 @@ static char *program_c(const u8 *code, u32 entry, const u8 *in) {
 #ifdef _WIN32
 /* Windows: only the programs built in (no compiler at run time); the others are interpreted */
 static void load(Prog *p, const char *so) { (void)so; __atomic_store_n(&p->state, 2, __ATOMIC_RELEASE); }
-static void *compiler(void *arg) { (void)arg; return NULL; }
-static void clean_cache(const char *dir, const char *current) { (void)dir; (void)current; }
 static int setup(void) {
     const char *e = getenv("SSTHEH_VUJIT");
     if (e && !atoi(e)) return 0;
