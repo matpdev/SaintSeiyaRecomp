@@ -39,7 +39,8 @@ static void *game_main(void *arg) {
 }
 
 /* disc/<name> where the game is: the folder it is run from, else next to the executable (a release:
- * the setup puts disc/ there), else one folder up (build/sstheh in the repository) */
+ * the setup puts disc/ there), else one folder up (build/sstheh in the repository), else in the
+ * settings folder (~/.local/share/sstheh/disc: the AppImage, which can't hold it) */
 static const char *disc_file(const char *name) {
     static char paths[2][1100];
     static int k;
@@ -50,6 +51,9 @@ static const char *disc_file(const char *name) {
     snprintf(out, 1100, "%s/disc/%s", exe, name);
     if (access(out, R_OK) == 0) return out;
     snprintf(out, 1100, "%s/../disc/%s", exe, name);
+    if (access(out, R_OK) == 0) return out;
+    platform_data_dir(exe, sizeof exe);
+    snprintf(out, 1100, "%s/disc/%s", exe, name);
     if (access(out, R_OK) == 0) return out;
     snprintf(out, 1100, "disc/%s", name);
     return out;

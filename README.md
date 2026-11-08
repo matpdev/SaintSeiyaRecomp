@@ -98,6 +98,14 @@ fetches SDL3, FFmpeg and builds FreeType into `tools/win/`; after the Linux buil
 zip (`dist/SaintSeiyaDecomp-windows-x64.zip`: the game, the setup with Qt 6's llvm-mingw build from `tools/win/qt`,
 the libraries' licenses). On Windows the settings and the memory card are in `%APPDATA%\sstheh`. Tested with Wine.
 
+### Linux release (AppImage)
+
+`tools/release.sh linux` makes `dist/SaintSeiyaDecomp-x86_64.AppImage` (about 90 MB) in a Debian 13 container
+(Docker; glibc 2.41: it runs on the distributions of 2025 on), from the C the Linux build generated, with the
+setup and the libraries the two need. The first time it opens the setup (`--setup` opens it again); the disc
+image, the font and the settings go to `~/.local/share/sstheh`, where the game looks for them. Built with Debian's
+SDL 3.2, the AppImage has no texture packs (PNG needs SDL 3.4).
+
 ### The release's setup
 
 `tools/setup/` is the setup of the prebuilt release (Qt 6): it checks the player's disc image (the executable must be

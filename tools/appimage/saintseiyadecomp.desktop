@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Saint Seiya: The Hades (PC Port)
+Comment=PC port of the PS2 game, from your own disc
+Exec=AppRun
+Icon=saintseiyadecomp
+Terminal=false
+Categories=Game;

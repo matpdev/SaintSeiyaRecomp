@@ -19,3 +19,6 @@ build.ninja
 /dist/
 /build-win/
 /build-win.ninja
+/build-rel/
+/build-rel.ninja
+/tools/appimage/runtime-x86_64

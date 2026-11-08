@@ -97,6 +97,14 @@ O port também compila para Windows (64 bits, Vulkan), em compilação cruzada a
 build llvm-mingw do Qt 6 em `tools/win/qt`, as licenças das bibliotecas). No Windows, as configurações e o memory
 card ficam em `%APPDATA%\sstheh`. Testado com o Wine.
 
+### Release para Linux (AppImage)
+
+`tools/release.sh linux` gera o `dist/SaintSeiyaDecomp-x86_64.AppImage` (uns 90 MB) num contêiner Debian 13
+(Docker; glibc 2.41: roda nas distribuições de 2025 em diante), a partir do C gerado pelo build do Linux, com o
+instalador e as bibliotecas de que os dois precisam. Na primeira vez ele abre o instalador (`--setup` abre de
+novo); a imagem do disco, a fonte e as configurações vão para `~/.local/share/sstheh`, onde o jogo as procura.
+Compilado com o SDL 3.2 do Debian, o AppImage não tem pacotes de textura (PNG precisa do SDL 3.4).
+
 ### O instalador do release
 
 `tools/setup/` é o instalador do release pré-compilado (Qt 6): confere a imagem do disco do jogador (o executável

@@ -1,6 +1,8 @@
 #!/bin/sh
 # Builds a release zip: the port and its setup, without anything from the game.
 #   tools/release.sh windows    -> dist/SaintSeiyaDecomp-windows-x64.zip
+#   tools/release.sh linux      -> dist/SaintSeiyaDecomp-x86_64.AppImage (built in a Debian 13 container:
+#                                  runs on glibc 2.41 and newer)
 # Needs the Linux build (build/: the translated code, the VU1 programs, the shaders), MinGW-w64, and
 # tools/win/ (tools/win_deps.sh; Qt's llvm-mingw build and its runtime in tools/win/qt, tools/win/qtrt).
 set -eu
@@ -90,7 +92,31 @@ EOF
     ok "dist/SaintSeiyaDecomp-windows-x64.zip ($(du -h dist/SaintSeiyaDecomp-windows-x64.zip | cut -f1))"
 }
 
+linux() {
+    [ -f build/sstheh ] || fail "build the Linux port first (./build.sh): its generated C is reused"
+    command -v docker >/dev/null || fail "docker is needed (the AppImage is built in a Debian 13 container)"
+    IMG=saintseiyadecomp-appimage
+    if ! docker image inspect $IMG >/dev/null 2>&1 && ! docker build -q -t $IMG tools/appimage >/dev/null 2>&1; then
+        # docker build can't be given a DNS server (a host resolving through 127.0.0.53 leaves the build
+        # without one): the same image made by hand, with the Dockerfile's commands
+        RUN=$(sed -n '/^RUN /,/[^\\]$/p' tools/appimage/Dockerfile | sed 's/^RUN //; s/\\$//' | tr '\n' ' ')
+        docker rm -f ${IMG}-make >/dev/null 2>&1 || true
+        docker run --dns "${SSTHEH_DOCKER_DNS:-1.1.1.1}" --name ${IMG}-make debian:trixie sh -c "$RUN" >/dev/null
+        docker commit ${IMG}-make $IMG >/dev/null
+        docker rm ${IMG}-make >/dev/null
+    fi
+    ok "build container ready (Debian 13)"
+    docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -e HOME=/tmp saintseiyadecomp-appimage sh /src/tools/appimage/build.sh
+    RT=tools/appimage/runtime-x86_64
+    [ -s $RT ] || curl -fsSL -o $RT https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64
+    cat $RT dist/app.squashfs > dist/SaintSeiyaDecomp-x86_64.AppImage
+    chmod +x dist/SaintSeiyaDecomp-x86_64.AppImage
+    rm -f dist/app.squashfs
+    ok "dist/SaintSeiyaDecomp-x86_64.AppImage ($(du -h dist/SaintSeiyaDecomp-x86_64.AppImage | cut -f1))"
+}
+
 case $TARGET in
     windows) windows ;;
-    *) echo "usage: tools/release.sh windows"; exit 1 ;;
+    linux) linux ;;
+    *) echo "usage: tools/release.sh windows|linux"; exit 1 ;;
 esac

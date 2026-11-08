@@ -62,6 +62,8 @@ static void make_path(const QString &dir) {
 }
 
 static QString game_dir;                                  /* where the game is: the setup's folder */
+static QString install_dir;                               /* where disc/ and fonts/ go: the same, or SSTHEH_INSTALL_DIR
+                                                             (the AppImage: ~/.local/share/sstheh, where the game looks too) */
 
 static QString game_exe() {
 #ifdef Q_OS_WIN
@@ -70,8 +72,8 @@ static QString game_exe() {
     return game_dir + "/sstheh";
 #endif
 }
-static QString disc_dir() { return game_dir + "/disc"; }
-static QString fonts_dir() { return game_dir + "/fonts"; }
+static QString disc_dir() { return install_dir + "/disc"; }
+static QString fonts_dir() { return install_dir + "/fonts"; }
 
 /* where the game keeps its settings (port/runtime/platform.c: ~/.local/share/sstheh, %APPDATA%\sstheh) */
 static QString config_dir() {
@@ -249,9 +251,11 @@ static void make_shortcut() {
     make_path(dir);
     QFile f(dir + "/saintseiyadecomp.desktop");
     if (!f.open(QIODevice::WriteOnly)) return;
+    QString appimage = qEnvironmentVariable("APPIMAGE");      /* run from the AppImage: the shortcut opens it */
     f.write(QString("[Desktop Entry]\nType=Application\nName=Saint Seiya: The Hades (PC Port)\n"
                     "Comment=PC port of the PS2 game, from your own disc\nExec=\"%1\"\nPath=%2\n"
-                    "Icon=applications-games\nTerminal=false\nCategories=Game;\n").arg(game_exe(), game_dir).toUtf8());
+                    "Icon=applications-games\nTerminal=false\nCategories=Game;\n")
+                .arg(appimage.isEmpty() ? game_exe() : appimage, appimage.isEmpty() ? game_dir : QFileInfo(appimage).absolutePath()).toUtf8());
     f.close();
     f.setPermissions(f.permissions() | QFileDevice::ExeOwner);
 #endif
@@ -466,6 +470,7 @@ int main(int argc, char **argv) {
     if (at >= 0) {
         QCoreApplication app(argc, argv);
         game_dir = QCoreApplication::applicationDirPath();
+        install_dir = qEnvironmentVariable("SSTHEH_INSTALL_DIR", game_dir);
         if (at + 1 >= args.size()) { fprintf(stderr, "usage: %s --install <image.iso> [--no-font] [--no-shortcut] [--4-3]\n", argv[0]); return 1; }
         Options o;
         o.font = !args.contains("--no-font");
@@ -475,6 +480,7 @@ int main(int argc, char **argv) {
     }
     QApplication app(argc, argv);
     game_dir = QCoreApplication::applicationDirPath();
+    install_dir = qEnvironmentVariable("SSTHEH_INSTALL_DIR", game_dir);
     Window w;
     w.show();
     int shot = args.indexOf("--screenshot");          /* tests: the window into a PNG, with an image chosen */

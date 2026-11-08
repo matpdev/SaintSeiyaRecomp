@@ -26,6 +26,13 @@
 
 void display_config_path(char *p, size_t n, const char *name);     /* display.c */
 
+/* PNG files need SDL 3.4 (SDL_LoadPNG, SDL_SavePNG); with an older SDL (the AppImage's, Debian 13's
+ * 3.2) there are no texture packs */
+#if !SDL_VERSION_ATLEAST(3, 4, 0)
+static SDL_Surface *SDL_LoadPNG(const char *path) { (void)path; SDL_SetError("texture packs need SDL 3.4"); return NULL; }
+static bool SDL_SavePNG(SDL_Surface *s, const char *path) { (void)s; (void)path; SDL_SetError("texture packs need SDL 3.4"); return false; }
+#endif
+
 static char dir[1024];               /* replacements */
 static int inited, dump_on;
 static u64 *names;                   /* replacements present, sorted */

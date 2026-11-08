@@ -1,0 +1,12 @@
+#!/bin/sh
+# The AppImage's entry: the setup the first time (or with --setup), the game afterwards. The disc
+# image, the font and the settings live in ~/.local/share/sstheh (the AppImage is read-only).
+HERE=$(dirname "$(readlink -f "$0")")
+export QT_PLUGIN_PATH="$HERE/usr/plugins"
+DATA="${XDG_DATA_HOME:-$HOME/.local/share}/sstheh"
+if [ "${1:-}" = "--setup" ] || [ ! -f "$DATA/disc/game.iso" ] || [ ! -f "$DATA/disc/SLES_541.62" ]; then
+    [ "${1:-}" = "--setup" ] && shift
+    mkdir -p "$DATA"
+    SSTHEH_INSTALL_DIR="$DATA" exec "$HERE/usr/bin/SaintSeiyaDecomp-setup" "$@"
+fi
+exec "$HERE/usr/bin/sstheh" "$@"
