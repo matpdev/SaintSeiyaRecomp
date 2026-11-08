@@ -39,7 +39,7 @@ ninja -f build-rel.ninja --quiet
 echo "port built"
 
 # ---- the setup
-cmake -S tools/setup -B $B/setup -G Ninja -DCMAKE_BUILD_TYPE=Release >/dev/null
+cmake -S tools/setup -B $B/setup -G Ninja -DCMAKE_BUILD_TYPE=Release -DSETUP_VERSION="${SSTHEH_VERSION:-dev}" >/dev/null
 cmake --build $B/setup >/dev/null
 echo "setup built"
 

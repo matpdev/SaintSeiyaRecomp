@@ -10,3 +10,6 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
 add_executable(SaintSeiyaDecomp-setup WIN32 main.cpp)
 find_package(Threads REQUIRED)
 target_link_libraries(SaintSeiyaDecomp-setup PRIVATE Qt6::Widgets Qt6::Network Threads::Threads)
+if(SETUP_VERSION)                       # shown in the window: tools/release.sh passes the release's version
+    target_compile_definitions(SaintSeiyaDecomp-setup PRIVATE SETUP_VERSION="${SETUP_VERSION}")
+endif()

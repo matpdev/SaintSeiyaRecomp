@@ -19,6 +19,16 @@
  */
 #include <QApplication>
 #include <QCheckBox>
+#include <QConicalGradient>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QFontMetrics>
+#include <QFrame>
+#include <QMimeData>
+#include <QPainter>
+#include <QStyle>
+#include <QStyleFactory>
+#include <QTemporaryDir>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QEventLoop>
@@ -50,6 +60,9 @@ static const char *const ISO_SHA1 = "6da748b0a966a884fc08b3d0d56ffb1bf51848c7"; 
 static const char *const FONT_FILE = "MPLUSRounded1c-Bold.ttf";
 static const char *const FONT_URL = "https://raw.githubusercontent.com/google/fonts/main/ofl/mplusrounded1c/MPLUSRounded1c-Bold.ttf";
 static const char *const TITLE = "Saint Seiya: The Hades — PC Port";
+#ifndef SETUP_VERSION
+#define SETUP_VERSION "dev"                     /* the release's version (tools/release.sh passes git describe) */
+#endif
 
 static bool portuguese;
 static QString T(const char *en, const char *pt) { return QString::fromUtf8(portuguese ? pt : en); }
@@ -300,74 +313,334 @@ static int install_cli(const QString &iso, const Options &o) {
 
 /* --------------------------------------------------------------------------------- the window */
 
+/* The look: night blue and gold, as the icon; drawn here, nothing from the game. The same on Linux and
+ * Windows (Fusion style with this palette and style sheet). */
+namespace look {
+const QColor night(0x0f, 0x0e, 0x24), card(0x17, 0x15, 0x3a), line(0x2a, 0x27, 0x60);
+const QColor text(0xe4, 0xe1, 0xf5), muted(0x8f, 0x8b, 0xbd), gold(0xd9, 0xb4, 0x4a), good(0x7e, 0xd4, 0x92), bad(0xff, 0x8a, 0x80);
+const char *const sheet = R"(
+QWidget#root { background: #0f0e24; }
+QLabel { color: #e4e1f5; background: transparent; }
+QLabel#muted { color: #8f8bbd; }
+QLabel#cardTitle { color: #d9b44a; font-weight: 600; }
+QLabel#status[state="ok"] { color: #7ed492; }
+QLabel#status[state="bad"] { color: #ff8a80; }
+QFrame#card { background: #17153a; border: 1px solid #2a2760; border-radius: 12px; }
+QFrame#drop { background: #121031; border: 2px dashed #3d3986; border-radius: 10px; }
+QFrame#drop:hover, QFrame#drop[hot="true"] { border-color: #d9b44a; background: #1a1745; }
+QCheckBox { color: #e4e1f5; spacing: 10px; padding: 3px 0; background: transparent; }
+QCheckBox::indicator { width: 16px; height: 16px; border-radius: 4px; border: 1px solid #4a4596; background: #0f0e24; }
+QCheckBox::indicator:hover { border-color: #d9b44a; }
+QCheckBox::indicator:checked { background: #d9b44a; border-color: #d9b44a; image: url(%CHECK%); }
+QProgressBar { background: #0f0e24; border: 1px solid #2a2760; border-radius: 5px; max-height: 10px; min-height: 10px; }
+QProgressBar::chunk { border-radius: 4px; background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #a8822a, stop:1 #f2d473); }
+QPushButton { color: #e4e1f5; background: #1f1c4a; border: 1px solid #34307a; border-radius: 9px; padding: 10px 24px; }
+QPushButton:hover { background: #29255f; }
+QPushButton:disabled { color: #5e5a8a; background: #151333; border-color: #221f4e; }
+QPushButton#primary { color: #1d1500; font-weight: 700; background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f2d473, stop:1 #c4982c); border: none; padding: 10px 34px; }
+QPushButton#primary:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f7e08f, stop:1 #d4a83a); }
+QPushButton#primary:disabled { color: #6b6440; background: #2e2a1c; }
+QPushButton#outline { color: #d9b44a; background: transparent; border: 1px solid #d9b44a; }
+QPushButton#outline:hover { background: #2a2540; }
+QPushButton#outline:disabled { color: #5e5a8a; border-color: #34307a; }
+QToolTip { color: #e4e1f5; background: #17153a; border: 1px solid #2a2760; }
+)";
+
+void apply(QApplication &app) {
+    app.setStyle(QStyleFactory::create("Fusion"));
+    QPalette p;
+    p.setColor(QPalette::Window, night);
+    p.setColor(QPalette::WindowText, text);
+    p.setColor(QPalette::Base, night);
+    p.setColor(QPalette::AlternateBase, card);
+    p.setColor(QPalette::Text, text);
+    p.setColor(QPalette::Button, card);
+    p.setColor(QPalette::ButtonText, text);
+    p.setColor(QPalette::Highlight, gold);
+    p.setColor(QPalette::HighlightedText, night);
+    p.setColor(QPalette::ToolTipBase, card);
+    p.setColor(QPalette::ToolTipText, text);
+    p.setColor(QPalette::PlaceholderText, muted);
+    p.setColor(QPalette::Disabled, QPalette::Text, muted);
+    p.setColor(QPalette::Disabled, QPalette::WindowText, muted);
+    app.setPalette(p);
+    /* the check mark, drawn into a file the style sheet can name */
+    static QTemporaryDir dir;
+    QString check = dir.path() + "/check.png";
+    QPixmap pm(32, 32);
+    pm.setDevicePixelRatio(2);
+    pm.fill(Qt::transparent);
+    {
+        QPainter g(&pm);
+        g.setRenderHint(QPainter::Antialiasing);
+        g.setPen(QPen(night, 2.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        g.drawPolyline(QPolygonF({QPointF(3.5, 8.5), QPointF(6.5, 11.5), QPointF(12.5, 4.5)}));
+    }
+    pm.save(check);
+    app.setStyleSheet(QString::fromLatin1(sheet).replace("%CHECK%", check));
+}
+
+/* the icon (as tools/appimage/saintseiyadecomp.png): gold "SS" on night blue */
+QIcon icon() {
+    QIcon ic;
+    for (int n : {16, 32, 48, 64, 128, 256}) {
+        QPixmap pm(n, n);
+        pm.fill(QColor(0x1c, 0x1a, 0x45));
+        QPainter g(&pm);
+        g.setRenderHint(QPainter::Antialiasing);
+        g.setPen(QPen(gold, qMax(1.0, n / 32.0)));
+        g.drawRect(QRectF(n * 0.05, n * 0.05, n * 0.9, n * 0.9));
+        QFont f;
+        f.setPixelSize(int(n * 0.42));
+        g.setFont(f);
+        g.drawText(QRectF(0, 0, n, n * 0.78), Qt::AlignCenter, "SS");
+        if (n >= 48) {
+            f.setPixelSize(int(n * 0.12));
+            g.setFont(f);
+            g.setPen(Qt::white);
+            g.drawText(QRectF(0, n * 0.62, n, n * 0.2), Qt::AlignCenter, "HADES");
+        }
+        g.end();
+        ic.addPixmap(pm);
+    }
+    return ic;
+}
+} // namespace look
+
+/* The top of the window: a night sky with a constellation (Pegasus), the title, the version */
+class Banner : public QWidget {
+public:
+    Banner() { setFixedHeight(150); }
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter g(this);
+        g.setRenderHint(QPainter::Antialiasing);
+        const double w = width(), h = height();
+        QLinearGradient sky(0, 0, w, h);
+        sky.setColorAt(0, QColor(0x22, 0x1c, 0x5c));
+        sky.setColorAt(0.55, QColor(0x14, 0x12, 0x38));
+        sky.setColorAt(1, look::night);
+        g.fillRect(rect(), sky);
+        QRadialGradient glow(w * 0.80, h * 0.35, h * 1.1);
+        glow.setColorAt(0, QColor(0xd9, 0xb4, 0x4a, 70));
+        glow.setColorAt(1, QColor(0xd9, 0xb4, 0x4a, 0));
+        g.fillRect(rect(), glow);
+        quint32 seed = 0x5eed1u;                                   /* the same stars every time */
+        auto rnd = [&seed] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / double(1 << 24); };
+        for (int i = 0; i < 90; i++) {
+            double x = rnd() * w, y = rnd() * h, r = 0.4 + rnd() * 1.1;
+            g.setPen(Qt::NoPen);
+            g.setBrush(QColor(255, 255, 255, int(60 + rnd() * 150)));
+            g.drawEllipse(QPointF(x, y), r, r);
+        }
+        /* Pegasus: the Great Square and its neck, in the right half */
+        const QPointF st[] = {{0.70, 0.30}, {0.80, 0.27}, {0.82, 0.55}, {0.71, 0.58}, {0.62, 0.70}, {0.55, 0.62},
+                              {0.88, 0.18}, {0.93, 0.36}};
+        auto at = [&](int i) { return QPointF(st[i].x() * w, st[i].y() * h); };
+        g.setPen(QPen(QColor(0xd9, 0xb4, 0x4a, 110), 1.2));
+        const int links[][2] = {{0, 1}, {1, 2}, {2, 3}, {3, 0}, {3, 4}, {4, 5}, {1, 6}, {2, 7}};
+        for (auto &l : links) g.drawLine(at(l[0]), at(l[1]));
+        for (int i = 0; i < 8; i++) {
+            QRadialGradient star(at(i), 7);
+            star.setColorAt(0, QColor(0xff, 0xf1, 0xc2));
+            star.setColorAt(0.35, QColor(0xf2, 0xd4, 0x73, 200));
+            star.setColorAt(1, QColor(0xf2, 0xd4, 0x73, 0));
+            g.setPen(Qt::NoPen);
+            g.setBrush(star);
+            g.drawEllipse(at(i), 7, 7);
+        }
+        QFont t = font();
+        t.setPixelSize(34);
+        t.setWeight(QFont::Bold);
+        t.setLetterSpacing(QFont::PercentageSpacing, 108);
+        g.setFont(t);
+        g.setPen(look::gold);
+        g.drawText(QRectF(28, 30, w, 44), Qt::AlignLeft | Qt::AlignVCenter, "SAINT SEIYA");
+        QFont s = font();
+        s.setPixelSize(16);
+        s.setLetterSpacing(QFont::PercentageSpacing, 125);
+        g.setFont(s);
+        g.setPen(look::text);
+        g.drawText(QRectF(30, 76, w, 24), Qt::AlignLeft | Qt::AlignVCenter, "THE HADES  ·  PC PORT");
+        QFont v = font();
+        v.setPixelSize(12);
+        g.setFont(v);
+        g.setPen(look::muted);
+        g.drawText(QRectF(30, 104, w, 20), Qt::AlignLeft | Qt::AlignVCenter,
+                   T("Setup  ·  version %1", "Instalador  ·  versão %1").arg(QString::fromUtf8(SETUP_VERSION)));
+        g.setPen(QPen(QColor(0xd9, 0xb4, 0x4a, 90), 1));
+        g.drawLine(QPointF(0, h - 0.5), QPointF(w, h - 0.5));
+    }
+};
+
+/* Where the image goes: click to browse, or drop the file on it */
+class DropZone : public QFrame {
+public:
+    std::function<void()> clicked;
+    std::function<void(const QString &)> dropped;
+    QLabel *icon, *name, *where;
+    DropZone() {
+        setObjectName("drop");
+        setAcceptDrops(true);
+        setCursor(Qt::PointingHandCursor);
+        setMinimumHeight(86);
+        auto *h = new QHBoxLayout(this);
+        h->setContentsMargins(18, 12, 18, 12);
+        h->setSpacing(16);
+        icon = new QLabel;
+        icon->setFixedSize(46, 46);
+        icon->setPixmap(disc_pixmap(46));
+        h->addWidget(icon);
+        auto *v = new QVBoxLayout;
+        v->setSpacing(2);
+        name = new QLabel;
+        QFont f = name->font();
+        f.setPointSizeF(f.pointSizeF() * 1.12);
+        f.setWeight(QFont::DemiBold);
+        name->setFont(f);
+        where = new QLabel;
+        where->setObjectName("muted");
+        where->setTextFormat(Qt::PlainText);
+        v->addWidget(name);
+        v->addWidget(where);
+        h->addLayout(v, 1);
+        empty();
+    }
+    void empty() {
+        name->setText(T("Drop your ISO here, or click to choose it", "Arraste a sua ISO para cá, ou clique para escolher"));
+        where->setText(T("Saint Seiya: The Hades, European release (SLES-54162), .iso",
+                         "Saint Seiya: The Hades, versão europeia (SLES-54162), .iso"));
+    }
+    void file(const QString &path) {
+        QFileInfo fi(path);
+        name->setText(fi.fileName());
+        where->setText(QFontMetrics(where->font()).elidedText(QDir::toNativeSeparators(fi.absolutePath()), Qt::ElideMiddle, 520));
+    }
+    static QPixmap disc_pixmap(int n) {                    /* a disc, drawn */
+        QPixmap pm(n * 2, n * 2);
+        pm.setDevicePixelRatio(2);
+        pm.fill(Qt::transparent);
+        QPainter g(&pm);
+        g.setRenderHint(QPainter::Antialiasing);
+        QConicalGradient c(n / 2.0, n / 2.0, 30);
+        c.setColorAt(0, QColor(0xf2, 0xd4, 0x73));
+        c.setColorAt(0.25, QColor(0x8e, 0x84, 0xe0));
+        c.setColorAt(0.5, QColor(0xd9, 0xb4, 0x4a));
+        c.setColorAt(0.75, QColor(0x6c, 0xc4, 0xd8));
+        c.setColorAt(1, QColor(0xf2, 0xd4, 0x73));
+        g.setPen(Qt::NoPen);
+        g.setBrush(c);
+        g.drawEllipse(QRectF(1, 1, n - 2, n - 2));
+        g.setBrush(look::night);
+        g.drawEllipse(QPointF(n / 2.0, n / 2.0), n * 0.14, n * 0.14);
+        g.setBrush(Qt::NoBrush);
+        g.setPen(QPen(QColor(255, 255, 255, 90), 1));
+        g.drawEllipse(QPointF(n / 2.0, n / 2.0), n * 0.24, n * 0.24);
+        return pm;
+    }
+protected:
+    void mousePressEvent(QMouseEvent *) override { if (clicked && isEnabled()) clicked(); }
+    static QString local_file(const QMimeData *m) {
+        if (!m->hasUrls() || m->urls().size() != 1 || !m->urls()[0].isLocalFile()) return QString();
+        return m->urls()[0].toLocalFile();
+    }
+    void hot(bool on) { setProperty("hot", on); style()->unpolish(this); style()->polish(this); }
+    void dragEnterEvent(QDragEnterEvent *e) override {
+        if (isEnabled() && !local_file(e->mimeData()).isEmpty()) { e->acceptProposedAction(); hot(true); }
+    }
+    void dragLeaveEvent(QDragLeaveEvent *) override { hot(false); }
+    void dropEvent(QDropEvent *e) override {
+        hot(false);
+        QString f = local_file(e->mimeData());
+        if (!f.isEmpty() && dropped) { e->acceptProposedAction(); dropped(f); }
+    }
+};
+
+static QFrame *card(const QString &number, const QString &title, QVBoxLayout **body) {
+    auto *c = new QFrame;
+    c->setObjectName("card");
+    auto *v = new QVBoxLayout(c);
+    v->setContentsMargins(20, 16, 20, 18);
+    v->setSpacing(10);
+    auto *t = new QLabel(number + "   " + title.toUpper());
+    t->setObjectName("cardTitle");
+    QFont f = t->font();
+    f.setLetterSpacing(QFont::PercentageSpacing, 110);
+    t->setFont(f);
+    v->addWidget(t);
+    *body = v;
+    return c;
+}
+
 class Window : public QWidget {
 public:
     Window() {
+        setObjectName("root");
         setWindowTitle(QString::fromUtf8(TITLE));
-        auto *v = new QVBoxLayout(this);
-        auto *title = new QLabel(QString::fromUtf8(TITLE));
-        QFont tf = title->font();
-        tf.setPointSizeF(tf.pointSizeF() * 1.6);
-        tf.setBold(true);
-        title->setFont(tf);
-        v->addWidget(title);
-        auto *intro = new QLabel(T("Choose the disc image (ISO) of your own copy of <b>Saint Seiya: The Hades</b>, European "
-                                   "release (SLES-54162). It is checked and copied next to the game; nothing from the game "
-                                   "comes with this port.",
-                                   "Escolha a imagem do disco (ISO) da sua cópia de <b>Saint Seiya: The Hades</b>, versão "
-                                   "europeia (SLES-54162). Ela é conferida e copiada para junto do jogo; nada do jogo vem "
-                                   "com este port."));
-        intro->setWordWrap(true);
-        v->addWidget(intro);
-        auto *row = new QHBoxLayout;
-        path = new QLineEdit;
-        path->setPlaceholderText(T("Disc image (.iso)", "Imagem do disco (.iso)"));
-        auto *browse = new QPushButton(T("Browse…", "Procurar…"));
-        row->addWidget(path, 1);
-        row->addWidget(browse);
-        v->addLayout(row);
+        setWindowIcon(look::icon());
+        auto *root = new QVBoxLayout(this);
+        root->setContentsMargins(0, 0, 0, 0);
+        root->setSpacing(0);
+        root->addWidget(new Banner);
+
+        auto *body = new QVBoxLayout;
+        body->setContentsMargins(24, 20, 24, 20);
+        body->setSpacing(14);
+        root->addLayout(body, 1);
+
+        QVBoxLayout *v1;
+        body->addWidget(card("1", T("Your disc", "Seu disco"), &v1));
+        drop = new DropZone;
+        v1->addWidget(drop);
         status = new QLabel;
+        status->setObjectName("status");
         status->setWordWrap(true);
-        v->addWidget(status);
-        auto *opts = new QGroupBox(T("Options", "Opções"));
-        auto *ov = new QVBoxLayout(opts);
-        font = new QCheckBox(T("Download the HD font for the texts (M PLUS Rounded 1c, free license, ~3.5 MB)",
-                               "Baixar a fonte HD dos textos (M PLUS Rounded 1c, licença livre, ~3,5 MB)"));
+        v1->addWidget(status);
+
+        QVBoxLayout *v2;
+        body->addWidget(card("2", T("Options", "Opções"), &v2));
+        font = new QCheckBox(T("HD font for the texts (M PLUS Rounded 1c, free license, ~3.5 MB download)",
+                               "Fonte HD nos textos (M PLUS Rounded 1c, licença livre, download de ~3,5 MB)"));
         wide = new QCheckBox(T("Widescreen 16:9 (F2 switches in the game)", "Widescreen 16:9 (F2 troca no jogo)"));
-        shortcut = new QCheckBox(T("Make a shortcut to the game", "Criar um atalho para o jogo"));
-        font->setChecked(true);
-        wide->setChecked(true);
-        shortcut->setChecked(true);
-        ov->addWidget(font);
-        ov->addWidget(wide);
-        ov->addWidget(shortcut);
-        v->addWidget(opts);
+        shortcut = new QCheckBox(T("Shortcut to the game", "Atalho para o jogo"));
+        for (QCheckBox *c : {font, wide, shortcut}) { c->setChecked(true); v2->addWidget(c); }
+
         bar = new QProgressBar;
         bar->setRange(0, 1000);
         bar->setValue(0);
         bar->setTextVisible(false);
-        v->addWidget(bar);
+        QSizePolicy sp = bar->sizePolicy();
+        sp.setRetainSizeWhenHidden(true);               /* shown while installing; its place kept */
+        bar->setSizePolicy(sp);
+        bar->hide();
+        body->addWidget(bar);
         step = new QLabel;
-        v->addWidget(step);
+        step->setObjectName("muted");
+        step->setWordWrap(true);
+        body->addWidget(step);
+        body->addStretch(1);
+
         auto *buttons = new QHBoxLayout;
-        install = new QPushButton(T("Install", "Instalar"));
-        play = new QPushButton(T("Play", "Jogar"));
         auto *quit = new QPushButton(T("Close", "Fechar"));
+        install = new QPushButton(T("Install", "Instalar"));
+        install->setObjectName("outline");
+        play = new QPushButton(T("Play", "Jogar"));
+        play->setObjectName("primary");
         play->setDefault(true);
+        for (QPushButton *b : {quit, install, play}) b->setCursor(Qt::PointingHandCursor);
+        buttons->addWidget(quit);
         buttons->addStretch(1);
         buttons->addWidget(install);
         buttons->addWidget(play);
-        buttons->addWidget(quit);
-        v->addLayout(buttons);
-        setMinimumWidth(640);
-        ov->setSpacing(6);
+        body->addLayout(buttons);
+        setFixedWidth(720);
 
-        connect(browse, &QPushButton::clicked, this, [this] {
+        drop->clicked = [this] {
             QString f = QFileDialog::getOpenFileName(this, T("Disc image", "Imagem do disco"), QDir::homePath(),
                                                      T("Disc images (*.iso);;All files (*)", "Imagens de disco (*.iso);;Todos os arquivos (*)"));
-            if (!f.isEmpty()) { path->setText(f); check(); }
-        });
-        connect(path, &QLineEdit::editingFinished, this, [this] { check(); });
+            if (!f.isEmpty()) choose(f);
+        };
+        drop->dropped = [this](const QString &f) { choose(f); };
         connect(install, &QPushButton::clicked, this, [this] { run(); });
         connect(play, &QPushButton::clicked, this, [this] {
             if (!QProcess::startDetached(game_exe(), {}, game_dir))
@@ -376,42 +649,47 @@ public:
         });
         connect(quit, &QPushButton::clicked, this, &QWidget::close);
 
+        install->setEnabled(false);
+        play->setEnabled(false);
         if (installed()) {
-            path->setText(disc_dir() + "/game.iso");
-            status->setText(T("The game is installed: press Play. To use another image, choose it and install again.",
-                              "O jogo está instalado: aperte Jogar. Para usar outra imagem, escolha-a e instale de novo."));
-            install->setEnabled(false);
+            drop->file(disc_dir() + "/game.iso");
+            show_status(T("✓  Installed: press Play. To use another image, drop it above and install again.",
+                          "✓  Instalado: aperte Jogar. Para usar outra imagem, solte-a acima e instale de novo."), true);
+            play->setEnabled(QFileInfo(game_exe()).exists());
         } else {
-            play->setEnabled(false);
-            install->setEnabled(false);
+            step->setText(T("Choose your disc image to begin.", "Escolha a imagem do seu disco para começar."));
         }
-        adjustSize();
         if (!QFileInfo(game_exe()).exists())
             step->setText(T("The game (%1) is not next to this setup: keep the release's files together.",
-                            "O jogo (%1) não está junto deste instalador: mantenha os arquivos do release juntos.").arg(game_exe()));
+                            "O jogo (%1) não está junto deste instalador: mantenha os arquivos do release juntos.")
+                              .arg(QFileInfo(game_exe()).fileName()));
+        setFixedHeight(sizeHint().height() + 24);       /* room for a two-line message */
     }
 
-    void choose(const QString &f) { path->setText(f); check(); }
+    void choose(const QString &f) {
+        drop->file(f);
+        disc = check_disc(f);
+        iso = f;
+        show_status((disc.ok ? "✓  " : "✕  ") + disc.message, disc.ok);
+        install->setEnabled(disc.ok);
+        install->setText(installed() ? T("Install again", "Instalar de novo") : T("Install", "Instalar"));
+        if (disc.ok && !installed()) step->setText(T("Ready to install.", "Pronto para instalar."));
+    }
 
 private:
-    QLineEdit *path;
+    DropZone *drop;
     QLabel *status, *step;
     QCheckBox *font, *wide, *shortcut;
     QProgressBar *bar;
     QPushButton *install, *play;
     Disc disc;
+    QString iso;
 
     void show_status(const QString &text, bool good) {
         status->setText(text);
-        status->setStyleSheet(good ? "color: #2e7d32;" : "color: #c62828;");
-    }
-
-    void check() {
-        if (path->text().isEmpty()) return;
-        disc = check_disc(path->text());
-        show_status(disc.message, disc.ok);
-        install->setEnabled(disc.ok);
-        install->setText(installed() ? T("Install again", "Instalar de novo") : T("Install", "Instalar"));
+        status->setProperty("state", good ? "ok" : "bad");
+        status->style()->unpolish(status);
+        status->style()->polish(status);
     }
 
     void run() {
@@ -422,13 +700,17 @@ private:
         o.shortcut = shortcut->isChecked();
         for (QWidget *w : findChildren<QWidget *>()) if (w != bar && w != step && w != status) w->setEnabled(false);
         step->setText(T("Copying the image…", "Copiando a imagem…"));
-        QString iso = path->text();
+        bar->setValue(0);
+        bar->show();
         Disc d = disc;
         auto *sha1 = new QByteArray;
-        std::thread([this, iso, d, sha1, o] {
-            QString err = copy_disc(iso, d, sha1, [this](qint64 done, qint64 total) {
+        std::thread([this, path = iso, d, sha1, o] {
+            QString err = copy_disc(path, d, sha1, [this](qint64 done, qint64 total) {
                 int v = int(done * 1000 / (total ? total : 1));
-                QMetaObject::invokeMethod(bar, [this, v] { bar->setValue(v); }, Qt::QueuedConnection);
+                QMetaObject::invokeMethod(bar, [this, v] {
+                    bar->setValue(v);
+                    step->setText(T("Copying the image…  %1%", "Copiando a imagem…  %1%").arg(v / 10));
+                }, Qt::QueuedConnection);
             });
             QMetaObject::invokeMethod(this, [this, err, sha1, o] { copied(err, sha1, o); }, Qt::QueuedConnection);
         }).detach();
@@ -436,29 +718,28 @@ private:
 
     /* after the copy, on the window's thread */
     void copied(const QString &err, QByteArray *sha1, const Options &o) {
-        {
-            QStringList notes;
-            if (err.isEmpty()) {
-                notes << sha1_note(*sha1);
-                if (o.font) {
-                    step->setText(T("Downloading the font…", "Baixando a fonte…"));
-                    QString e = download_font();
-                    if (!e.isEmpty()) notes << e;
-                }
-                write_settings(o);
-                if (o.shortcut) make_shortcut();
-                step->setText(T("Done.", "Pronto."));
-                bar->setValue(1000);
-                show_status(T("Installed. ", "Instalado. ") + notes.join(' '), true);
-            } else {
-                step->setText(QString());
-                show_status(err, false);
+        QStringList notes;
+        if (err.isEmpty()) {
+            notes << sha1_note(*sha1);
+            if (o.font) {
+                step->setText(T("Downloading the font…", "Baixando a fonte…"));
+                QString e = download_font();
+                if (!e.isEmpty()) notes << e;
             }
-            delete sha1;
-            for (QWidget *w : findChildren<QWidget *>()) w->setEnabled(true);
-            play->setEnabled(installed() && QFileInfo(game_exe()).exists());
-            install->setEnabled(disc.ok);
+            write_settings(o);
+            if (o.shortcut) make_shortcut();
+            bar->setValue(1000);
+            step->setText(notes.join(' '));
+            show_status(T("✓  Installed: press Play.", "✓  Instalado: aperte Jogar."), true);
+        } else {
+            step->setText(QString());
+            show_status("✕  " + err, false);
         }
+        delete sha1;
+        for (QWidget *w : findChildren<QWidget *>()) w->setEnabled(true);
+        play->setEnabled(installed() && QFileInfo(game_exe()).exists());
+        install->setEnabled(disc.ok);
+        if (play->isEnabled()) play->setFocus();
     }
 };
 
@@ -479,6 +760,8 @@ int main(int argc, char **argv) {
         return install_cli(args[at + 1], o);
     }
     QApplication app(argc, argv);
+    look::apply(app);
+    app.setWindowIcon(look::icon());
     game_dir = QCoreApplication::applicationDirPath();
     install_dir = qEnvironmentVariable("SSTHEH_INSTALL_DIR", game_dir);
     Window w;

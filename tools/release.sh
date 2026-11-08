@@ -29,7 +29,7 @@ windows() {
     .venv/bin/ninja -f build-win.ninja >/dev/null
     ok "game built for Windows"
     mkdir -p build-win/setup
-    x86_64-w64-mingw32-g++ -std=c++17 -O2 -DUNICODE -D_UNICODE -DQT_NO_DEBUG \
+    x86_64-w64-mingw32-g++ -std=c++17 -O2 -DUNICODE -D_UNICODE -DQT_NO_DEBUG -DSETUP_VERSION="\"$VERSION\"" \
         -I$QT/include -I$QT/include/QtCore -I$QT/include/QtGui -I$QT/include/QtWidgets -I$QT/include/QtNetwork \
         -I$QT/mkspecs/win32-clang-g++ tools/setup/main.cpp -o build-win/setup/SaintSeiyaDecomp-setup.exe \
         -mwindows -static-libstdc++ -static-libgcc -L$QT/lib -lQt6EntryPoint -lQt6Widgets -lQt6Gui -lQt6Network \
@@ -104,7 +104,7 @@ EOF
 linux() {
     shaders
     if [ -n "${SSTHEH_RELEASE_HERE:-}" ]; then
-        SRC=$PWD sh tools/appimage/build.sh
+        SRC=$PWD SSTHEH_VERSION=$VERSION sh tools/appimage/build.sh
     else
         command -v docker >/dev/null || fail "docker is needed (the AppImage is built in a Debian 13 container)"
         IMG=saintseiyadecomp-appimage
@@ -118,7 +118,7 @@ linux() {
             docker rm ${IMG}-make >/dev/null
         fi
         ok "build container ready (Debian 13)"
-        docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -e HOME=/tmp saintseiyadecomp-appimage sh /src/tools/appimage/build.sh
+        docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -e HOME=/tmp -e SSTHEH_VERSION="$VERSION" saintseiyadecomp-appimage sh /src/tools/appimage/build.sh
     fi
     RT=tools/appimage/runtime-x86_64
     [ -s $RT ] || curl -fsSL -o $RT https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64
