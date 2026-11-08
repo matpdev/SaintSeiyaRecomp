@@ -71,7 +71,8 @@ SSTHEH_AUDIO=0 SSTHEH_FRAME_LOG=frames.csv ./build/sstheh -v
 | `SSTHEH_PRIMS=N` | from vertical blank N, prints the first GS primitives' packets |
 | `SSTHEH_TEX_DUMP=1` | saves every texture the game uses as PNG (`~/.local/share/sstheh/textures/dump/`) |
 | `SSTHEH_FONT_DEBUG=1` | logs every glyph the game writes and every text drawn with the font (and how long it took) |
-| `SSTHEH_GSREC=file` | records the `gs` thread's work (`SSTHEH_GSREC_FROM`, default 9000; `SSTHEH_GSREC_FRAMES`, 150); `build/sstheh --gs-replay file` replays it without the game: time per frame and a hash of everything drawn (run it from `build/`) |
+| `SSTHEH_GSREC=file` | records the `gs` thread's work (`SSTHEH_GSREC_FROM`, default 9000; `SSTHEH_GSREC_FRAMES`, 150); `build/sstheh --gs-replay file` replays it without the game: time per frame and a hash of everything drawn |
+| `SSTHEH_REPLAY_SHOTS=folder` | with `--gs-replay`: the frames are also drawn by the Vulkan renderer and saved (`frame_N.ppm`, every `SSTHEH_REPLAY_EVERY`-th, 10; `SSTHEH_SHOT_PRESENT=WxH` as a window shows them). The same recording replayed by two builds must give identical pictures: the way to check a renderer change on a fight, which never plays the same twice |
 
 ## VU1 (the vector unit drawing the 3D)
 

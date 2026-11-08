@@ -458,7 +458,10 @@ static int gen_lower(Str *s, u32 w, u32 pc) {
 #undef SEEN
 }
 
-static char *generate_v2(const u8 *code, u32 entry, const u8 *in) {
+/* A program as C, the general way: every pair a labelled block, a branch setting where to go on
+   (v->pc kept up to date), so any shape works (a delay slot holding a branch or an E bit, an E bit
+   whose next pair branches). program_c uses it for those shapes only. */
+static char *program_c_general(const u8 *code, u32 entry, const u8 *in) {
     Str s = {0};
     /* what the program uses */
     int flag_reads = 0, qp = 0, uses_f[32] = {0}, uses_i[16] = {0}, uses_acc = 0;
@@ -546,12 +549,12 @@ static char *generate_v2(const u8 *code, u32 entry, const u8 *in) {
     return s.buf;
 }
 
-/* ---- v3: control flow known when writing the C. A branch's pair and the pair after it (its delay
+/* ---- program_c: control flow known when writing the C. A branch's pair and the pair after it (its delay
  * slot) are written together, followed by direct gotos to the target or the next pair; an E bit's
  * pair is followed by the next pair and the way out. v->pc is only written on the way out. Q, P, I,
  * the flags and the four-pair flag delay (a shift register: m0 newest .. m3 seen by flag reads) are
  * locals too. Programs where a delay slot holds a branch or an E bit, or an E bit's next pair
- * branches, are written by generate_v2. */
+ * branches, are written by program_c_general. */
 static const char *const LOCAL_STATE_MACROS =
     "#define IVAL l_i\n#define QVAL l_q\n#define PVAL l_p\n#define CLIPV l_clip\n"
     "#define SETFLAGS(d, u) do { u32 z_ = vu_rev4[_mm_movemask_ps(_mm_cmpeq_ps(u, _mm_setzero_ps()))] & (d), "
@@ -744,7 +747,9 @@ static void qp_pending(const u8 *code, const u8 *in, const Flow *f, u8 *tick) {
     for (u32 p = 0; p < NPAIRS; p++) tick[p] = (qin[p] ? 1 : 0) | (pin[p] ? 2 : 0);
 }
 
-static char *generate(const u8 *code, u32 entry, const u8 *in) {
+/* The C of the program starting at pair `entry` made of the pairs in[] (see above), compiled into
+   a function returning 0 at its end, 1 on an indirect jump out of it, 2 when it can't start. */
+static char *program_c(const u8 *code, u32 entry, const u8 *in) {
     /* fall back on the general writer for the unusual shapes */
     for (u32 p = 0; p < NPAIRS; p++) {
         if (!in[p]) continue;
@@ -752,7 +757,7 @@ static char *generate(const u8 *code, u32 entry, const u8 *in) {
         pair_flags(code, p, &br, &e);
         if (!br && !e) continue;
         pair_flags(code, (p + 1) % NPAIRS, &br1, &e1);
-        if (br1 || e1) return generate_v2(code, entry, in);
+        if (br1 || e1) return program_c_general(code, entry, in);
     }
     Str s = {0};
     Needs n = {0, 0, 0, NULL, NULL};
@@ -923,7 +928,7 @@ static void *compiler(void *arg) {
         else { queue_head = p->queue_next; if (!queue_head) queue_tail = NULL; }
         pthread_mutex_unlock(&qlock);
         if (!p->source) {
-            p->source = generate(p->image, p->entry / 8, p->in);
+            p->source = program_c(p->image, p->entry / 8, p->in);
             free(p->image);
             free(p->in);
             p->image = p->in = NULL;
@@ -977,7 +982,7 @@ static void clean_cache(const char *dir, const char *current) {
     u32 removed = 0;
     struct dirent *e;
     while ((e = readdir(d))) {
-        snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+        if (snprintf(path, sizeof path, "%s/%s", dir, e->d_name) >= (int)sizeof path) continue;
         if (cache_file(e->d_name)) { removed += unlink(path) == 0; continue; }
         if (!version_name(e->d_name)) continue;
         int mine = !strcmp(e->d_name, current);
@@ -1036,20 +1041,23 @@ static int setup(void) {
     if (built_in && header_hash != vu_builtin_header_hash)
         rt_log("vujit", "the sources changed since the build: its %d programs are not used", vu_builtin_count);
     else if (built_in) rt_log("vujit", "%d VU1 programs built in", vu_builtin_count);
-    can_compile = 1;
     const char *home = getenv("XDG_CACHE_HOME");
     char base[PATH_MAX];
     if (home && *home) snprintf(base, sizeof base, "%s", home);
     else snprintf(base, sizeof base, "%s/.cache", getenv("HOME") ? getenv("HOME") : "/tmp");
-    snprintf(cache_dir, sizeof cache_dir, "%s/sstheh", base);
-    mkdir(base, 0755);
-    mkdir(cache_dir, 0755);
-    snprintf(cache_dir, sizeof cache_dir, "%s/sstheh/vu", base);
-    mkdir(cache_dir, 0755);
     char version[17], vu_dir[PATH_MAX];
     snprintf(version, sizeof version, "%016llx", (unsigned long long)((header_hash ^ GEN_VERSION) * 0x100000001B3ull));
-    snprintf(vu_dir, sizeof vu_dir, "%s", cache_dir);
-    snprintf(cache_dir, sizeof cache_dir, "%s/%s", vu_dir, version);
+    if (snprintf(vu_dir, sizeof vu_dir, "%s/sstheh/vu", base) >= (int)sizeof vu_dir ||
+        snprintf(cache_dir, sizeof cache_dir, "%s/%s", vu_dir, version) >= (int)sizeof cache_dir) {
+        rt_log("vujit", "cache path too long: VU1 programs not compiled at run time");
+        return built_in;
+    }
+    can_compile = 1;
+    char top[PATH_MAX + 16];
+    snprintf(top, sizeof top, "%s/sstheh", base);
+    mkdir(base, 0755);
+    mkdir(top, 0755);
+    mkdir(vu_dir, 0755);
     mkdir(cache_dir, 0755);
     clean_cache(vu_dir, version);
     long cpus = sysconf(_SC_NPROCESSORS_ONLN);
@@ -1109,7 +1117,7 @@ static ProgFn find(Vu *v) {
         if (access(so_path, R_OK) == 0) { load(p, so_path); perf.jit_cached++; }
         else {
             perf.jit_queued++;
-            p->source = generate(v->code, entry, in);
+            p->source = program_c(v->code, entry, in);
             pthread_mutex_lock(&qlock);
             if (queue_tail) queue_tail->queue_next = p;
             else queue_head = p;
@@ -1245,7 +1253,7 @@ static u32 ahead_image(const u8 *code, u32 from, u32 to, u64 *seen, u32 nseen_ma
         if (j < *nseen || *nseen == nseen_max) continue;
         seen[(*nseen)++] = key;
         if (gen_file[0]) {
-            char *src = generate(code, starts[k], in);
+            char *src = program_c(code, starts[k], in);
             gen_write(src, key);
             free(src);
             continue;

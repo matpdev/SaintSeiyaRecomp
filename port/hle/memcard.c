@@ -77,7 +77,7 @@ static void guest_str(Ctx *c, u32 a, char *out, size_t n) {
 
 /* A card path (absolute or relative to the current directory) to a host path. */
 static void host_path(const char *card, char *out, size_t n) {
-    char full[PATH_MAX];
+    char full[2 * PATH_MAX];
     if (card[0] == '/') snprintf(full, sizeof full, "%s", card);
     else snprintf(full, sizeof full, "%s%s%s", cwd, cwd[strlen(cwd) - 1] == '/' ? "" : "/", card);
     /* drop "." and resolve ".." */
@@ -204,8 +204,7 @@ void hle_mc2_rename(Ctx *c) {               /* socket, name, new name */
     snprintf(dir, sizeof dir, "%s", path);
     char *slash = strrchr(dir, '/');
     if (slash) *slash = 0;
-    snprintf(path2, sizeof path2, "%s/%s", dir, to);
-    if (rename(path, path2)) RET(MC_NOENT);
+    if (snprintf(path2, sizeof path2, "%s/%s", dir, to) >= (int)sizeof path2 || rename(path, path2)) RET(MC_NOENT);
     RET(MC_OK);
 }
 
@@ -244,7 +243,7 @@ void hle_mc2_getdir(Ctx *c) {               /* socket, pattern, offset, max, ent
     char dir[PATH_MAX], glob[256];
     snprintf(dir, sizeof dir, "%s", path);
     char *slash = strrchr(dir, '/');
-    snprintf(glob, sizeof glob, "%s", slash ? slash + 1 : dir);
+    if (snprintf(glob, sizeof glob, "%s", slash ? slash + 1 : dir) >= (int)sizeof glob) RET(MC_NOENT);
     if (slash) *slash = 0;
     if (strlen(dir) < strlen(root)) snprintf(dir, sizeof dir, "%s", root);
     u32 n = 0, seen = 0;

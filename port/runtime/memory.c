@@ -115,3 +115,8 @@ u64 gs_priv_read(u32 off) {
     memcpy(&v, io_gs + (off & 0x1FF8), 8);
     return v;
 }
+
+/* (a GS recording's replay: port/gs/gsrec.c) */
+void gs_priv_write(u32 off, u64 v) {
+    memcpy(io_gs + (off & 0x1FF8), &v, 8);
+}

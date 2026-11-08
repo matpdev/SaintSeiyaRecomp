@@ -110,9 +110,8 @@ static void decide(void) {
         display_config_path(dir, sizeof dir, "fonts");
         int found = font_in(dir);
         if (!found && !platform_exe_dir(exe, sizeof exe)) {
-            snprintf(dir, sizeof dir, "%s/fonts", exe);
-            found = font_in(dir);
-            if (!found) { snprintf(dir, sizeof dir, "%s/../fonts", exe); found = font_in(dir); }
+            if (snprintf(dir, sizeof dir, "%s/fonts", exe) < (int)sizeof dir) found = font_in(dir);
+            if (!found && snprintf(dir, sizeof dir, "%s/../fonts", exe) < (int)sizeof dir) found = font_in(dir);
         }
         if (!found) return;
     }
@@ -520,7 +519,7 @@ u32 *textfont_replace(const u8 *texels, u32 tw, u32 th, const u32 *pal, u32 *w_o
             cv->exp_hash = region_hash(e, tw, th, cv->stride);
             cv->exp_key = ek;
         }
-        int sk = 0;                                             /* the texture's hash for this stride, once */
+        u32 sk = 0;                                             /* the texture's hash for this stride, once */
         while (sk < nstrides && strides[sk] != cv->stride) sk++;
         if (sk == nstrides) {
             if (nstrides == 4) sk = 3;

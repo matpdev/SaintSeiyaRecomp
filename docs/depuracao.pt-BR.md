@@ -74,7 +74,8 @@ SSTHEH_AUDIO=0 SSTHEH_FRAME_LOG=frames.csv ./build/sstheh -v
 | `SSTHEH_PRIMS=N` | a partir do vertical blank N, imprime os pacotes das primeiras primitivas do GS |
 | `SSTHEH_TEX_DUMP=1` | salva cada textura que o jogo usa como PNG (`~/.local/share/sstheh/textures/dump/`) |
 | `SSTHEH_FONT_DEBUG=1` | registra cada letra que o jogo escreve e cada texto desenhado com a fonte (e quanto tempo levou) |
-| `SSTHEH_GSREC=arquivo` | grava o trabalho da thread `gs` (`SSTHEH_GSREC_FROM`, padrão 9000; `SSTHEH_GSREC_FRAMES`, 150); `build/sstheh --gs-replay arquivo` o repete sem o jogo: tempo por quadro e um hash de tudo o que foi desenhado (rode de dentro de `build/`) |
+| `SSTHEH_GSREC=arquivo` | grava o trabalho da thread `gs` (`SSTHEH_GSREC_FROM`, padrão 9000; `SSTHEH_GSREC_FRAMES`, 150); `build/sstheh --gs-replay arquivo` o repete sem o jogo: tempo por quadro e um hash de tudo o que foi desenhado |
+| `SSTHEH_REPLAY_SHOTS=pasta` | com `--gs-replay`: os quadros também são desenhados pelo renderizador Vulkan e salvos (`frame_N.ppm`, um a cada `SSTHEH_REPLAY_EVERY`, 10; `SSTHEH_SHOT_PRESENT=LxA` como uma janela os mostra). A mesma gravação repetida por dois builds tem que dar imagens idênticas: é o jeito de conferir uma mudança no renderizador numa luta, que nunca se repete igual |
 
 ## VU1 (a unidade vetorial que desenha o 3D)
 

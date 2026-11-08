@@ -415,7 +415,7 @@ static float interpolate(const s16 *p, float t) {
 /* The work area's sample at off bytes from the current position. */
 static s16 *fx_at(Core *c, u32 off) {
     u32 size = c->eea + 1 - c->esa;
-    return &ram[((c->esa + (c->fx_pos + off) % size) & (RAM_BYTES - 1)) >> 1];
+    return (s16 *)&ram[((c->esa + (c->fx_pos + off) % size) & (RAM_BYTES - 1)) >> 1];
 }
 
 static s16 sat16(float x) { return x > 32767.0f ? 32767 : x < -32768.0f ? -32768 : (s16)x; }

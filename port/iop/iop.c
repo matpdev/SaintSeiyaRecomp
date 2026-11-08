@@ -236,6 +236,7 @@ static void command(Ctx *c, u32 iop_addr) {
     u8 *p = iop_ram + iop_addr;
     u32 cid, w;
     memcpy(&cid, p + 8, 4);
+#undef F              /* (r5900.h's float register) */
 #define F(off) (memcpy(&w, p + (off), 4), w)
     switch (cid) {
     case 0x80000000:                          /* CHANGE_SADDR */

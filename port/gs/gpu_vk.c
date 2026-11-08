@@ -655,17 +655,141 @@ static Rect drawn_rect(const GpuDraw *d, const GpuVertex *v, int wide_3d) {
     return rect_clamp(x0, y0, x1, y1);
 }
 
-void gpu_render(GpuFrame *f, const GpuVertex *verts) {
-    if (want_scale && want_scale != scale) rescale(want_scale);
-    if (!dev || !f || !f->ndraws) return;
-    if (inflight[inflight_at]) {
-        SDL_WaitForGPUFences(dev, true, &inflight[inflight_at], 1);
-        SDL_ReleaseGPUFence(dev, inflight[inflight_at]);
-        inflight[inflight_at] = NULL;
+/* A frame being replayed: the render pass open, what is bound in it (only changes are sent: each one
+   costs the GPU backend new descriptor sets / uniform space), and the scratch copy of a target that
+   draws read (copy_src: of which target; copy_ok: the part copied; copy_dirty: drawn over since). */
+typedef struct {
+    SDL_GPUCommandBuffer *cmd;
+    const GpuVertex *vs;
+    int wide_3d, wide_2d;
+    SDL_GPURenderPass *rp;
+    u32 fbp, zbp;                       /* the pass's targets */
+    SDL_GPUGraphicsPipeline *pipe;
+    SDL_GPUTexture *tex;
+    SDL_GPUSampler *smp;
+    SDL_Rect sc;
+    float fix;
+    DrawUniforms u;
+    int have_u;
+    SDL_GPUTexture *copy_src;
+    Rect copy_ok, copy_dirty;
+} Replay;
+
+static void pass_end(Replay *r) {
+    if (!r->rp) return;
+    SDL_EndGPURenderPass(r->rp);
+    r->rp = NULL;
+    r->fbp = ~0u;
+}
+
+/* a render pass on the draw's colour and depth targets; nothing bound yet */
+static void pass_begin(Replay *r, const GpuDraw *d, SDL_GPUTexture *color, SDL_GPUTexture *depth) {
+    pass_end(r);
+    SDL_GPUColorTargetInfo ci = {0};
+    ci.texture = color;
+    ci.load_op = SDL_GPU_LOADOP_LOAD;
+    ci.store_op = SDL_GPU_STOREOP_STORE;
+    SDL_GPUDepthStencilTargetInfo di = {0};
+    di.texture = depth;
+    di.load_op = SDL_GPU_LOADOP_LOAD;
+    di.store_op = SDL_GPU_STOREOP_STORE;
+    di.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+    di.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+    r->rp = SDL_BeginGPURenderPass(r->cmd, &ci, 1, &di);
+    r->fbp = d->fbp;
+    r->zbp = d->zbp;
+    SDL_GPUViewport vp = {0, 0, (float)(RT_SIZE * scale), (float)(RT_SIZE * scale), 0, 1};
+    SDL_SetGPUViewport(r->rp, &vp);
+    SDL_GPUBufferBinding bb = {vbuf, 0};
+    SDL_BindGPUVertexBuffers(r->rp, 0, &bb, 1);
+    float target_size[4] = {RT_SIZE, RT_SIZE, 1.0f / RT_SIZE, 1.0f / RT_SIZE};
+    SDL_PushGPUVertexUniformData(r->cmd, 0, target_size, sizeof target_size);
+    r->pipe = NULL;
+    r->tex = NULL;
+    r->smp = NULL;
+    r->sc = (SDL_Rect){-1, -1, -1, -1};
+    r->fix = -1.0f;
+    r->have_u = 0;
+}
+
+/* The texture a draw samples: a decoded one, a render target, or none (white). A draw reading the
+   target it draws on gets the scratch copy, made again if the part it samples is not in it or was
+   drawn over (sampled_rect). *across: the texture's width in texels (RT_SIZE for a target). */
+static SDL_GPUTexture *draw_texture(Replay *r, const GpuDraw *d, SDL_GPUTexture *color, float *across) {
+    *across = (float)d->tw;
+    if (!d->textured) return white;
+    if (d->tex >= 0) {
+        Tex *t = tex_slot((u32)d->tex);
+        if (t->id != (u32)d->tex || !t->tex) return white;
+        t->last_used = frame_no;
+        return t->tex;
     }
-    memcpy(shown_priv, f->priv, sizeof shown_priv);
-    have_shown_priv = 1;
-    frame_no++;
+    if (d->tex >= -1) return white;
+    SDL_GPUTexture *src = find_color((u32)(-2 - d->tex));
+    *across = RT_SIZE;               /* a target is RT_SIZE wide; S/Q still counts in TEX0's size (TW, TH) */
+    if (!src) return white;
+    if (src != color) return src;
+    Rect need = sampled_rect(d, r->vs);
+    if (r->copy_src != src || !rect_inside(need, r->copy_ok) || rect_meets(need, r->copy_dirty)) {
+        pass_end(r);
+        SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(r->cmd);
+        u32 x = (u32)need.x0 * scale, y = (u32)need.y0 * scale;
+        SDL_GPUTextureLocation a = {src, 0, 0, x, y, 0}, b = {scratch, 0, 0, x, y, 0};
+        SDL_CopyGPUTextureToTexture(cp, &a, &b, (u32)(need.x1 - need.x0) * scale, (u32)(need.y1 - need.y0) * scale, 1, false);
+        SDL_EndGPUCopyPass(cp);
+        r->copy_src = src;
+        r->copy_ok = need;
+        r->copy_dirty = (Rect){0, 0, 0, 0};
+        rt_copies++;
+        rt_copy_px += (u64)(need.x1 - need.x0) * (need.y1 - need.y0) * scale * scale;
+    }
+    return scratch;
+}
+
+/* the draw's scissor in target pixels; 2D kept 3/4 as wide in widescreen: what was off the 4:3
+   screen stays off */
+static SDL_Rect draw_scissor(const Replay *r, const GpuDraw *d) {
+    SDL_Rect sc = {(int)d->scissor[0] * scale, (int)d->scissor[2] * scale,
+                   (int)(d->scissor[1] - d->scissor[0] + 1) * scale, (int)(d->scissor[3] - d->scissor[2] + 1) * scale};
+    if (kept_43(d, r->wide_3d) && widescreen_on() && !anchored(d, r->wide_3d) && !r->wide_2d) {
+        float c = (float)(d->fbw * 32);
+        int x0 = (int)((c + ((float)d->scissor[0] - c) * 0.75f) * scale);
+        int x1 = (int)((c + ((float)d->scissor[1] + 1 - c) * 0.75f) * scale);
+        sc.x = x0;
+        sc.w = x1 - x0;
+    }
+    return sc;
+}
+
+/* the draw's pipeline, scissor, blend constant, uniforms and texture, where they changed */
+static void draw_bind(Replay *r, const GpuDraw *d, SDL_GPUTexture *tex, float across) {
+    SDL_GPUGraphicsPipeline *pipe = pipe_for(d);
+    if (pipe != r->pipe) { SDL_BindGPUGraphicsPipeline(r->rp, pipe); r->pipe = pipe; }
+    SDL_Rect sc = draw_scissor(r, d);
+    if (memcmp(&sc, &r->sc, sizeof sc)) { SDL_SetGPUScissor(r->rp, &sc); r->sc = sc; }
+    float fix = (float)((d->alpha >> 32) & 0xFF) / 128.0f;
+    if (fix != r->fix) { SDL_FColor bc = {fix, fix, fix, fix}; SDL_SetGPUBlendConstants(r->rp, bc); r->fix = fix; }
+    u32 wm = 0xF;
+    int zw = d->zwrite, st;
+    atest_masks(d, &wm, &zw, &st);
+    float tw = (float)d->tw, th = (float)d->th, ntw = across, nth = d->tex < -1 && d->textured ? across : th;
+    DrawUniforms u = {{(s32)d->textured, (s32)d->tfx, (s32)d->tcc, (s32)d->fst},
+                      {st, (s32)d->atest[1], (s32)d->atest[2], (s32)d->atest[3]},
+                      {tw, th, 1.0f / ntw, 1.0f / nth},
+                      {d->region[0], d->region[1], d->region[2], d->region[3]}};
+    if (!r->have_u || memcmp(&u, &r->u, sizeof u)) { SDL_PushGPUFragmentUniformData(r->cmd, 0, &u, sizeof u); r->u = u; r->have_u = 1; }
+    int smp = (d->filter ? 1 : 0) | (d->wrap_u ? 2 : 0) | (d->wrap_v ? 4 : 0);
+    if (d->tex < -1) smp |= 6;
+    if (tex != r->tex || samplers[smp] != r->smp) {
+        SDL_GPUTextureSamplerBinding tsb = {tex, samplers[smp]};
+        SDL_BindGPUFragmentSamplers(r->rp, 0, &tsb, 1);
+        r->tex = tex;
+        r->smp = samplers[smp];
+    }
+}
+
+/* SSTHEH_GPU_DEBUG / SSTHEH_GPU_STATS: a line about the frame now and then */
+static void frame_logs(const GpuFrame *f) {
     if (getenv("SSTHEH_GPU_DEBUG") && frame_no % 100 == 1) {
         GpuDraw *d = &f->draws[0];
         GpuVertex *v = &f->verts[d->first];
@@ -680,132 +804,50 @@ void gpu_render(GpuFrame *f, const GpuVertex *verts) {
         up_bytes = up_count = 0;
         rt_copies = rt_copy_px = 0;
     }
-    SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(dev);
-    upload_verts(cmd, f, verts);
-    const GpuVertex *vs = verts ? verts : f->verts;
-    SDL_GPUTexture *copy_src = NULL;    /* what the scratch copy holds: of which target, the part copied, */
-    Rect copy_ok = {0, 0, 0, 0}, copy_dirty = {0, 0, 0, 0};  /* what was drawn there since */
-    SDL_GPURenderPass *rp = NULL;
-    u32 cur_fbp = ~0u, cur_zbp = ~0u;
-    SDL_GPUTexture *cur_color = NULL;
-    /* what is bound in the current render pass: only changes are sent (each one costs the GPU
-     * backend new descriptor sets / uniform space) */
-    SDL_GPUGraphicsPipeline *last_pipe = NULL;
-    SDL_GPUTexture *last_tex = NULL;
-    SDL_GPUSampler *last_smp = NULL;
-    SDL_Rect last_sc = {-1, -1, -1, -1};
-    float last_fix = -1.0f;
-    DrawUniforms last_u;
-    int have_u = 0;
-    int wide_3d = frame_wide_3d(f), wide_2d = frame_wide_2d(f);
+}
+
+/* A recorded frame drawn on the GPU (verts: NULL, or the vertices moved for an interpolated frame). */
+void gpu_render(GpuFrame *f, const GpuVertex *verts) {
+    if (want_scale && want_scale != scale) rescale(want_scale);
+    if (!dev || !f || !f->ndraws) return;
+    if (inflight[inflight_at]) {
+        SDL_WaitForGPUFences(dev, true, &inflight[inflight_at], 1);
+        SDL_ReleaseGPUFence(dev, inflight[inflight_at]);
+        inflight[inflight_at] = NULL;
+    }
+    memcpy(shown_priv, f->priv, sizeof shown_priv);
+    have_shown_priv = 1;
+    frame_no++;
+    frame_logs(f);
+    Replay r = {0};
+    r.cmd = SDL_AcquireGPUCommandBuffer(dev);
+    upload_verts(r.cmd, f, verts);
+    r.vs = verts ? verts : f->verts;
+    r.wide_3d = frame_wide_3d(f);
+    r.wide_2d = frame_wide_2d(f);
+    r.fbp = r.zbp = ~0u;
     u32 drawn[MAX_RT];                  /* frame buffers drawn in this frame, and whether at the sides */
     int drawn_sides[MAX_RT], ndrawn = 0;
     for (u32 i = 0; i < f->ndraws; i++) {
         GpuDraw *d = &f->draws[i];
         SDL_GPUTexture *color = target(colors, &ncolors, d->fbp, 0);
-        {
-            int k = 0;
-            while (k < ndrawn && drawn[k] != d->fbp) k++;
-            if (k == ndrawn && ndrawn < MAX_RT) { drawn[k] = d->fbp; drawn_sides[k] = 0; ndrawn++; }
-            if (k < ndrawn) drawn_sides[k] |= d->sides || (wide_2d && d->covers);
-        }
+        int k = 0;
+        while (k < ndrawn && drawn[k] != d->fbp) k++;
+        if (k == ndrawn && ndrawn < MAX_RT) { drawn[k] = d->fbp; drawn_sides[k] = 0; ndrawn++; }
+        if (k < ndrawn) drawn_sides[k] |= d->sides || (r.wide_2d && d->covers);
         SDL_GPUTexture *depth = target(depths, &ndepths, d->zbp, 1);
-        /* the texture: decoded, a render target, or nothing */
-        SDL_GPUTexture *tex = white;
-        float tw = (float)d->tw, th = (float)d->th, ntw = tw, nth = th;    /* texels per S/T of 1; texels across the texture */
-        if (d->textured && d->tex >= 0) {
-            Tex *t = tex_slot((u32)d->tex);
-            if (t->id == (u32)d->tex && t->tex) { tex = t->tex; t->last_used = frame_no; }
-        } else if (d->textured && d->tex < -1) {
-            u32 src_fbp = (u32)(-2 - d->tex);
-            SDL_GPUTexture *src = find_color(src_fbp);
-            ntw = nth = RT_SIZE;      /* a target is RT_SIZE wide; S/Q still counts in TEX0's size (TW, TH) */
-            if (src && src == color) {                 /* reading the target being drawn: a copy of it */
-                Rect need = sampled_rect(d, vs);
-                if (copy_src != src || !rect_inside(need, copy_ok) || rect_meets(need, copy_dirty)) {
-                    if (rp) { SDL_EndGPURenderPass(rp); rp = NULL; cur_fbp = ~0u; }
-                    SDL_GPUCopyPass *cp = SDL_BeginGPUCopyPass(cmd);
-                    u32 x = (u32)need.x0 * scale, y = (u32)need.y0 * scale;
-                    SDL_GPUTextureLocation a = {src, 0, 0, x, y, 0}, b = {scratch, 0, 0, x, y, 0};
-                    SDL_CopyGPUTextureToTexture(cp, &a, &b, (u32)(need.x1 - need.x0) * scale, (u32)(need.y1 - need.y0) * scale, 1, false);
-                    SDL_EndGPUCopyPass(cp);
-                    copy_src = src;
-                    copy_ok = need;
-                    copy_dirty = (Rect){0, 0, 0, 0};
-                    rt_copies++;
-                    rt_copy_px += (u64)(need.x1 - need.x0) * (need.y1 - need.y0) * scale * scale;
-                }
-                tex = scratch;
-            } else if (src) tex = src;
-        }
-        if (!rp || d->fbp != cur_fbp || d->zbp != cur_zbp) {
-            if (rp) SDL_EndGPURenderPass(rp);
-            SDL_GPUColorTargetInfo ci = {0};
-            ci.texture = color;
-            ci.load_op = SDL_GPU_LOADOP_LOAD;
-            ci.store_op = SDL_GPU_STOREOP_STORE;
-            SDL_GPUDepthStencilTargetInfo di = {0};
-            di.texture = depth;
-            di.load_op = SDL_GPU_LOADOP_LOAD;
-            di.store_op = SDL_GPU_STOREOP_STORE;
-            di.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
-            di.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
-            rp = SDL_BeginGPURenderPass(cmd, &ci, 1, &di);
-            cur_fbp = d->fbp;
-            cur_zbp = d->zbp;
-            cur_color = color;
-            SDL_GPUViewport vp = {0, 0, (float)(RT_SIZE * scale), (float)(RT_SIZE * scale), 0, 1};
-            SDL_SetGPUViewport(rp, &vp);
-            SDL_GPUBufferBinding bb = {vbuf, 0};
-            SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
-            float target_size[4] = {RT_SIZE, RT_SIZE, 1.0f / RT_SIZE, 1.0f / RT_SIZE};
-            SDL_PushGPUVertexUniformData(cmd, 0, target_size, sizeof target_size);
-            last_pipe = NULL;
-            last_tex = NULL;
-            last_smp = NULL;
-            last_sc = (SDL_Rect){-1, -1, -1, -1};
-            last_fix = -1.0f;
-            have_u = 0;
-        }
-        (void)cur_color;
-        SDL_GPUGraphicsPipeline *pipe = pipe_for(d);
-        if (pipe != last_pipe) { SDL_BindGPUGraphicsPipeline(rp, pipe); last_pipe = pipe; }
-        SDL_Rect sc = {(int)d->scissor[0] * scale, (int)d->scissor[2] * scale,
-                       (int)(d->scissor[1] - d->scissor[0] + 1) * scale, (int)(d->scissor[3] - d->scissor[2] + 1) * scale};
-        if (kept_43(d, wide_3d) && widescreen_on() && !anchored(d, wide_3d) && !wide_2d) {     /* 2D kept 3/4 as wide: what was off the 4:3 screen stays off */
-            float c = (float)(d->fbw * 32);
-            int x0 = (int)((c + ((float)d->scissor[0] - c) * 0.75f) * scale);
-            int x1 = (int)((c + ((float)d->scissor[1] + 1 - c) * 0.75f) * scale);
-            sc.x = x0;
-            sc.w = x1 - x0;
-        }
-        if (memcmp(&sc, &last_sc, sizeof sc)) { SDL_SetGPUScissor(rp, &sc); last_sc = sc; }
-        float fix = (float)((d->alpha >> 32) & 0xFF) / 128.0f;
-        if (fix != last_fix) { SDL_FColor bc = {fix, fix, fix, fix}; SDL_SetGPUBlendConstants(rp, bc); last_fix = fix; }
-        u32 wm = 0xF;
-        int zw = d->zwrite, st;
-        atest_masks(d, &wm, &zw, &st);
-        DrawUniforms u = {{(s32)d->textured, (s32)d->tfx, (s32)d->tcc, (s32)d->fst},
-                          {st, (s32)d->atest[1], (s32)d->atest[2], (s32)d->atest[3]},
-                          {tw, th, 1.0f / ntw, 1.0f / nth},
-                          {d->region[0], d->region[1], d->region[2], d->region[3]}};
-        if (!have_u || memcmp(&u, &last_u, sizeof u)) { SDL_PushGPUFragmentUniformData(cmd, 0, &u, sizeof u); last_u = u; have_u = 1; }
-        int smp = (d->filter ? 1 : 0) | (d->wrap_u ? 2 : 0) | (d->wrap_v ? 4 : 0);
-        if (d->tex < -1) smp |= 6;
-        if (tex != last_tex || samplers[smp] != last_smp) {
-            SDL_GPUTextureSamplerBinding tsb = {tex, samplers[smp]};
-            SDL_BindGPUFragmentSamplers(rp, 0, &tsb, 1);
-            last_tex = tex;
-            last_smp = samplers[smp];
-        }
-        SDL_DrawGPUPrimitives(rp, d->count, 1, d->first, 0);
-        if (color == copy_src) copy_dirty = rect_union(copy_dirty, drawn_rect(d, vs, wide_3d));
+        float across;
+        SDL_GPUTexture *tex = draw_texture(&r, d, color, &across);
+        if (!r.rp || d->fbp != r.fbp || d->zbp != r.zbp) pass_begin(&r, d, color, depth);
+        draw_bind(&r, d, tex, across);
+        SDL_DrawGPUPrimitives(r.rp, d->count, 1, d->first, 0);
+        if (color == r.copy_src) r.copy_dirty = rect_union(r.copy_dirty, drawn_rect(d, r.vs, r.wide_3d));
     }
-    if (rp) SDL_EndGPURenderPass(rp);
+    pass_end(&r);
     for (int k = 0; k < ndrawn; k++)
         for (int j = 0; j < ncolors; j++)
             if (colors[j].key == drawn[k]) colors[j].sides = drawn_sides[k];
-    inflight[inflight_at] = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+    inflight[inflight_at] = SDL_SubmitGPUCommandBufferAndAcquireFence(r.cmd);
     inflight_at ^= 1;
 }
 

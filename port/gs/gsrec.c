@@ -13,6 +13,11 @@
  * `warm` (30) pictures shown took (the game shows a picture more than once a frame: a frame is what
  * has draws when one is shown) and a hash of everything recorded for the GPU (draws, vertices,
  * textures): the same hash, the same pictures.
+ *
+ * SSTHEH_REPLAY_SHOTS=folder: the replayed frames are also drawn by the Vulkan renderer and saved
+ * there (frame_NNNN.ppm, every SSTHEH_REPLAY_EVERY-th frame, 10 if not given; SSTHEH_SHOT_PRESENT=WxH:
+ * as a window that size shows them): the same recording drawn by two builds of the renderer must
+ * give the same pictures, which a fight played twice never does.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,6 +30,8 @@
 #include "gs.h"
 #include "gpu.h"
 
+#include <SDL3/SDL.h>
+
 void gs_state_io(FILE *f, int save);
 void vif_state_io(FILE *f, int save);
 void vu_state_io(FILE *f, int save);
@@ -33,6 +40,8 @@ u32 kernel_vblank_count(void);
 
 enum { EV_VIF1 = 1, EV_GIF, EV_VIFTAG, EV_FLIP };
 static const char magic[16] = "sstheh gsrec 1";
+
+static const u32 priv_regs[5] = {0x0000, 0x0070, 0x0080, 0x0090, 0x00A0};   /* PMODE, DISPFB1, DISPLAY1, DISPFB2, DISPLAY2 */
 
 static FILE *out;
 static int state = -1;          /* -1 not set up, 0 off or done, 1 waiting for the start, 2 recording */
@@ -75,7 +84,9 @@ void gsrec_flip(void) {
         return;
     }
     if (state != 2) return;
-    put(EV_FLIP, NULL, 0);
+    u64 priv[5];                        /* the display registers: which picture is shown */
+    for (int k = 0; k < 5; k++) priv[k] = gs_priv_read(priv_regs[k]);
+    put(EV_FLIP, priv, sizeof priv);
     if (++recorded >= frames) {
         fclose(out);
         out = NULL;
@@ -120,6 +131,29 @@ static double now_ms(void) {
     return t.tv_sec * 1e3 + t.tv_nsec / 1e6;
 }
 
+/* the renderer's picture once frame n was drawn, saved as dir/frame_NNNN.ppm */
+static void replay_shot(const char *dir, u32 n) {
+    static u32 *px;
+    int w = 0, h = 0, pw, ph;
+    if (!px) px = malloc(4096 * 4096 * 4);
+    const char *e = getenv("SSTHEH_SHOT_PRESENT");
+    if (e && sscanf(e, "%dx%d", &pw, &ph) == 2 && pw > 0 && ph > 0 && pw <= 4096 && ph <= 4096) {
+        gpu_read_presented(px, pw, ph);
+        w = pw;
+        h = ph;
+    } else gpu_read_display(px, 1024, 1024, &w, &h);
+    char file[1100];
+    snprintf(file, sizeof file, "%s/frame_%04u.ppm", dir, n);
+    FILE *f = fopen(file, "wb");
+    if (!f) return;
+    fprintf(f, "P6\n%d %d\n255\n", w, h);
+    for (int i = 0; i < w * h; i++) {
+        u8 rgb[3] = {(u8)px[i], (u8)(px[i] >> 8), (u8)(px[i] >> 16)};
+        fwrite(rgb, 1, 3, f);
+    }
+    fclose(f);
+}
+
 int gsrec_replay(const char *path, int warm) {
     FILE *f = fopen(path, "rb");
     char m[16];
@@ -128,7 +162,11 @@ int gsrec_replay(const char *path, int warm) {
         return 1;
     }
     extern int gpu_on;
-    gpu_on = 1;                 /* recorded for the GPU, as in the game (nothing is drawn) */
+    gpu_on = 1;                 /* recorded for the GPU, as in the game (drawn only for SSTHEH_REPLAY_SHOTS) */
+    const char *shots = getenv("SSTHEH_REPLAY_SHOTS");
+    u32 every = getenv("SSTHEH_REPLAY_EVERY") ? (u32)atoi(getenv("SSTHEH_REPLAY_EVERY")) : 10;
+    if (!every) every = 1;
+    if (shots && (!SDL_Init(SDL_INIT_VIDEO) || gpu_init(NULL))) { fprintf(stderr, "no GPU for SSTHEH_REPLAY_SHOTS\n"); return 1; }
     gs_init();
     gs_state_io(f, 0);
     vif_state_io(f, 0);
@@ -155,11 +193,20 @@ int gsrec_replay(const char *path, int warm) {
         case EV_GIF: gif_dma(p, bytes / 16); break;
         case EV_VIFTAG: vif_tag(1, p); break;
         case EV_FLIP: {
+            if (bytes >= 40)                    /* (recordings made before 2026-11-08 don't have them) */
+                for (int k = 0; k < 5; k++) { u64 v; memcpy(&v, p + 8 * k, 8); gs_priv_write(priv_regs[k], v); }
             gpu_seal_frame();
             GpuFrame *fr;
             double th = now_ms();
             while ((fr = gpu_next_frame())) {
                 if (pictures >= (u32)warm) { h = hash_frame(h, fr); draws += fr->ndraws; sealed++; }
+                static u32 nframe;
+                if (shots) {
+                    gpu_upload(fr);                         /* every frame drawn: the picture shown is often */
+                    gpu_render(fr, NULL);                   /* the one drawn the frame before (double buffering) */
+                    if (nframe % every == 0) replay_shot(shots, nframe);
+                    nframe++;
+                }
                 gpu_release_frame(fr);
             }
             if (pictures >= (u32)warm) hashing += now_ms() - th;

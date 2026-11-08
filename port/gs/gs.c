@@ -406,10 +406,14 @@ static void draw_triangle(int ctx, const Vertex *a, const Vertex *b, const Verte
     if (area == 0.0f) return;
     int gouraud = (gs.prim >> 3) & 1, textured = (gs.prim >> 4) & 1;
     float minx = a->x, maxx = a->x, miny = a->y, maxy = a->y;
-    if (b->x < minx) minx = b->x; if (c->x < minx) minx = c->x;
-    if (b->x > maxx) maxx = b->x; if (c->x > maxx) maxx = c->x;
-    if (b->y < miny) miny = b->y; if (c->y < miny) miny = c->y;
-    if (b->y > maxy) maxy = b->y; if (c->y > maxy) maxy = c->y;
+    if (b->x < minx) minx = b->x;
+    if (c->x < minx) minx = c->x;
+    if (b->x > maxx) maxx = b->x;
+    if (c->x > maxx) maxx = c->x;
+    if (b->y < miny) miny = b->y;
+    if (c->y < miny) miny = c->y;
+    if (b->y > maxy) maxy = b->y;
+    if (c->y > maxy) maxy = c->y;
     int sx0, sx1, sy0, sy1;
     scissor_of(ctx, &sx0, &sx1, &sy0, &sy1);
     int xs = (int)(minx < 0 ? 0 : minx), xe = (int)(maxx > 2047 ? 2047 : maxx);
@@ -730,7 +734,7 @@ static u32 tex_alloc(u32 w, u32 h) {
             if (tex_ents[i].used && rec_frame - tex_ents[i].last >= ages[k]) tex_release(i);
     if (ntex_free == 0) return 0;
     u32 i = tex_free[--ntex_free];
-    tex_ents[i] = (TexEnt){{0}, w, h, rec_frame, 1};
+    tex_ents[i] = (TexEnt){.w = w, .h = h, .last = rec_frame, .used = 1};
     tex_bytes += need;
     return i;
 }
@@ -829,6 +833,53 @@ static void tex_decode(u32 *px, u32 tbp, u32 tbw, u32 psm, u32 tw, u32 th, u32 c
     }
 }
 
+/* A texture not seen with this content (ckey): decoded from the GS memory into a new entry, or
+   replaced (a texture pack's PNG, or a text drawn with the font file), and queued for upload.
+   Returns the entry, 0 when there is no room. */
+static u32 texture_new(const u64 ckey[3], u32 tbp, u32 tbw, u32 psm, u32 tw, u32 th, u32 cbp, u32 cpsm, u32 csa) {
+    u32 idx = tex_alloc(tw, th);
+    if (!idx) return 0;
+    u32 *px = malloc((size_t)tw * th * 4);
+    tex_decode(px, tbp, tbw, psm, tw, th, cbp, cpsm, csa);
+    /* texture packs (texpack.c): saved, or replaced by a PNG of any size (draws keep using the
+       original's size in texels) */
+    u64 name = texpack_name(px, tw, th);
+    texpack_dump(name, px, tw, th);
+    u32 uw = tw, uh = th, *rp = texpack_find(name, &uw, &uh), rect[4] = {0, 0, 0, 0}, fill = 0;
+    if (!rp && psm == 0x13 && textfont_active()) {      /* a text the game wrote: drawn with the font file */
+        u8 *ix = malloc((size_t)tw * th);
+        u32 pal[256];
+        texels8(ix, tbp, tbw, tw, th);
+        palette8(pal, cbp, cpsm);
+        rp = textfont_replace(ix, tw, th, pal, &uw, &uh, rect, &fill);
+        free(ix);
+    }
+    tex_ents[idx].plain = 1;                 /* every texel within a few levels of the first */
+    for (u32 i = 1; i < tw * th && tex_ents[idx].plain; i++)
+        for (int sh = 0; sh < 32; sh += 8) {
+            int d = (int)((px[i] >> sh) & 0xFF) - (int)((px[0] >> sh) & 0xFF);
+            if (d > 8 || d < -8) { tex_ents[idx].plain = 0; break; }
+        }
+    if (rp) {
+        free(px);
+        px = rp;
+        tex_bytes += ((u64)uw * uh - (u64)tw * th) * 4;
+        tex_ents[idx].w = uw;
+        tex_ents[idx].h = uh;
+    }
+    memcpy(tex_ents[idx].ckey, ckey, 3 * sizeof *ckey);
+    GROW(rec->uploads, rec->nuploads, rec->cap_uploads, GpuTexUpload);
+    rec->uploads[rec->nuploads++] = (GpuTexUpload){idx, uw, uh, px, rect[0], rect[1], rect[2], rect[3], fill};
+    return idx;
+}
+
+/* The texture a draw samples (context ctx's TEX0): its entry, -2 - FBP for a render target, -1 for
+   none. Found the cheapest way that is sure:
+     1. memo: nothing written to the GS memory since this TEX0 / TEXA found its entry;
+     2. tex_fast: the same page versions (the pages it covers not written since);
+     3. tex_by_content: the same content (hash of those pages): many textures are uploaded again
+        every frame with the same data;
+     4. else decoded anew (texture_new). */
 static s32 texture_for(int ctx, u32 *w_out, u32 *h_out) {
     transfer_flush();
     u64 t0 = gs.tex0[ctx];
@@ -866,41 +917,9 @@ static s32 texture_for(int ctx, u32 *w_out, u32 *h_out) {
     u32 *cs = &tex_by_content[(ckey[0] ^ ckey[1] * 7 ^ ckey[2] * 13) % 16384];
     u32 idx = *cs;
     if (!(idx && tex_ents[idx].used && !memcmp(tex_ents[idx].ckey, ckey, sizeof ckey))) {
-        /* decode */
-        idx = tex_alloc(tw, th);
+        idx = texture_new(ckey, tbp, tbw, psm, tw, th, cbp, cpsm, csa);
         if (!idx) return -1;
-        u32 *px = malloc((size_t)tw * th * 4);
-        tex_decode(px, tbp, tbw, psm, tw, th, cbp, cpsm, csa);
-        /* texture packs (texpack.c): saved, or replaced by a PNG of any size (draws keep using
-           the original's size in texels) */
-        u64 name = texpack_name(px, tw, th);
-        texpack_dump(name, px, tw, th);
-        u32 uw = tw, uh = th, *rp = texpack_find(name, &uw, &uh), rect[4] = {0, 0, 0, 0}, fill = 0;
-        if (!rp && psm == 0x13 && textfont_active()) {      /* a text the game wrote: drawn with the font file */
-            u8 *ix = malloc((size_t)tw * th);
-            u32 pal[256];
-            texels8(ix, tbp, tbw, tw, th);
-            palette8(pal, cbp, cpsm);
-            rp = textfont_replace(ix, tw, th, pal, &uw, &uh, rect, &fill);
-            free(ix);
-        }
-        tex_ents[idx].plain = 1;                 /* every texel within a few levels of the first */
-        for (u32 i = 1; i < tw * th && tex_ents[idx].plain; i++)
-            for (int sh = 0; sh < 32; sh += 8) {
-                int d = (int)((px[i] >> sh) & 0xFF) - (int)((px[0] >> sh) & 0xFF);
-                if (d > 8 || d < -8) { tex_ents[idx].plain = 0; break; }
-            }
-        if (rp) {
-            free(px);
-            px = rp;
-            tex_bytes += ((u64)uw * uh - (u64)tw * th) * 4;
-            tex_ents[idx].w = uw;
-            tex_ents[idx].h = uh;
-        }
-        memcpy(tex_ents[idx].ckey, ckey, sizeof ckey);
         *cs = idx;
-        GROW(rec->uploads, rec->nuploads, rec->cap_uploads, GpuTexUpload);
-        rec->uploads[rec->nuploads++] = (GpuTexUpload){idx, uw, uh, px, rect[0], rect[1], rect[2], rect[3], fill};
     }
     tex_ents[idx].last = rec_frame;
     memcpy(f->key, key, sizeof key);

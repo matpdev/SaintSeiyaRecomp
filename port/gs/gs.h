@@ -19,3 +19,4 @@ void kernel_raise_dmac(int ch);
 
 /* memory.c */
 u64 gs_priv_read(u32 offset);
+void gs_priv_write(u32 offset, u64 value);
