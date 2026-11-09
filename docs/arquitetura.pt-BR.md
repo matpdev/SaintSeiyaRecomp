@@ -38,6 +38,16 @@ O C traduzido fica no git (`generated/`): é só código, os dados do executáve
 os pacotes do release assim, `tools/release.sh`); com ele, o `configure.py` refaz o `generated/` sempre que o
 tradutor muda, e a mudança entra num commit como qualquer outra. A saída é a mesma em qualquer máquina.
 
+**Duas versões, um executável.** A versão japonesa (SLPS_257.44, 2007) passa pelo mesmo caminho
+(`config/jp/slps_257.44.yaml`, `config/jp/hle.txt`, para o `generated-jp/`, com as funções chamadas
+`JP_F_XXXXXXXX`). O disco decide: o `main.c` carrega o executável que o `SYSTEM.CNF` dele inicia, e o
+`game_select` (`port/hle/game.c`) o reconhece pelo conteúdo, aponta o despacho da CPU (`cpu.c`) para o código
+traduzido daquela versão e preenche o `game_addr`, a coluna do `port/hle/game.h` de onde o código nativo lê os
+endereços. A coluna japonesa foi achada com o `tools/version_map.py`: 98% das funções europeias estão no
+executável japonês, deslocadas; as variáveis vêm dos endereços que o código correspondente monta. As
+bibliotecas do SDK e da CRI são idênticas; umas 180 funções do jogo mudaram (o dano e o passo da batalha entre
+elas).
+
 Cada função do jogo vira `void F_XXXXXXXX(Ctx *c)`. O `Ctx` guarda os registradores do EE; `RW(n)` são os
 32 bits baixos do registrador n, `SET32(n, v)` o altera, `F(n)` é um registrador de ponto flutuante,
 `rd32(c, endereço)` / `wr32(c, endereço, v)` leem e escrevem na memória do PS2 (`port/runtime/r5900.h`).

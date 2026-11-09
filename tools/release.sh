@@ -77,7 +77,7 @@ https://github.com/matpdev/SaintSeiyaRecomp
 
 PORTUGUES
 1. Abra SaintSeiyaDecomp-setup.exe.
-2. Escolha a imagem (ISO) da sua copia do jogo, versao europeia (SLES-54162). Ela e conferida e copiada para a
+2. Escolha a imagem (ISO) da sua copia do jogo, versao europeia (SLES-54162) ou japonesa (SLPS-25744). Ela e conferida e copiada para a
    pasta disc\ (cerca de 4 GB livres sao necessarios).
 3. Aperte Instalar e depois Jogar. Da proxima vez, abra sstheh.exe ou o atalho.
 Precisa de Windows 10/11 de 64 bits e de uma placa de video com Vulkan.
@@ -87,7 +87,7 @@ As configuracoes e o memory card ficam em %APPDATA%\sstheh.
 
 ENGLISH
 1. Run SaintSeiyaDecomp-setup.exe.
-2. Choose the disc image (ISO) of your own copy of the game, European release (SLES-54162). It is checked and
+2. Choose the disc image (ISO) of your own copy of the game, European (SLES-54162) or Japanese (SLPS-25744) release. It is checked and
    copied into the disc\ folder (about 4 GB free are needed).
 3. Press Install, then Play. Next time, run sstheh.exe or the shortcut.
 Needs 64-bit Windows 10/11 and a graphics card with Vulkan.

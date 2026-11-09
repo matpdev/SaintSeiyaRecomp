@@ -10,7 +10,7 @@ echo
 echo "- **Windows 10/11 (64-bit):** \`SaintSeiyaDecomp-windows-x64.zip\`: unzip, run \`SaintSeiyaDecomp-setup.exe\`."
 echo "- **Linux (x86-64, glibc 2.41+):** \`SaintSeiyaDecomp-x86_64.AppImage\`: make it executable and run it."
 echo
-echo "You need your own copy of the game (European release, SLES-54162) as an ISO: the setup checks it and"
+echo "You need your own copy of the game as an ISO, the European (SLES-54162) or the Japanese (SLPS-25744) release: the setup checks it and"
 echo "copies it next to the game. No game data (disc image, models, textures, sounds) is in these packages."
 echo "A GPU with Vulkan is needed."
 echo

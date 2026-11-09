@@ -24,3 +24,6 @@ build.ninja
 /tools/appimage/runtime-x86_64
 build-ci/
 /generated/recomp/report.txt
+/generated-jp/recomp/report.txt
+/asm-jp/
+/src-jp/

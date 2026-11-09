@@ -1,0 +1,67 @@
+# splat configuration for the Japanese release (SLPS-25744, Meiou Hades Juunikyuu-hen).
+# Boundaries mapped from config/sles_541.62.yaml by matching the European functions in this executable.
+name: SLPS_257.44
+options:
+  basename: SLPS_257.44
+  target_path: disc/SLPS_257.44
+  base_path: ../..
+  platform: ps2
+  compiler: MWCCPS2
+  asm_path: asm-jp
+  src_path: src-jp
+  build_path: build-jp
+  ld_script_path: build-jp/SLPS_257.44.ld
+  symbol_addrs_path: [config/jp/symbol_addrs.txt]
+  undefined_funcs_auto_path: config/jp/undefined_funcs_auto.txt
+  undefined_syms_auto_path: config/jp/undefined_syms_auto.txt
+  gp_value: 0x50E570
+  find_file_boundaries: False
+  create_undefined_funcs_auto: True
+  create_undefined_syms_auto: True
+  disasm_unknown: True
+  string_encoding: ASCII
+  rodata_string_guesser_level: 2
+  data_string_guesser_level: 2
+  named_regs_for_c_funcs: False
+  migrate_rodata_to_functions: False
+  section_order: [".text", ".vutext", ".data", ".rodata", ".sdata", ".sbss", ".bss"]
+  ld_bss_is_noload: True
+
+segments:
+  - name: elf_header
+    type: databin
+    start: 0x0
+
+  - name: main
+    type: code
+    start: 0x80
+    vram: 0x100000
+    subalign: null
+    subsegments:
+      - [0x80,     asm, start]
+      - [0x4598,   asm, sdk_ipu]          # 0x104518
+      - [0x37520,  asm, main]             # 0x1374A0
+      - [0x37720,  asm, sdk_b]            # 0x1376A0
+      - [0x38BA0,  asm, game_a]           # 0x138B20
+      - [0x143BA0, asm, cri]              # 0x243B20
+      - [0x19F760, asm, game_b]           # 0x29F6E0
+      - [0x2CD780, bin, vu1_microcode]    # 0x3CD700
+      - [0x2DCD00, data, data_a]          # 0x3DCC80
+
+  - name: main2
+    type: code
+    start: 0x3C5080
+    vram: 0x4C5000
+    bss_size: 0x3C100          # 0x506F00 .. 0x543000
+    subalign: null
+    subsegments:
+      - [0x3C5080, asm, sinit]            # 0x4C5000
+      - [0x3CF030, data, data_b]          # 0x4CEFB0
+      - [0x4065F0, sdata, sdata]          # 0x506570
+      - { start: 0x406F80, type: bss, vram: 0x506F00, name: bss }
+
+  - name: elf_tail
+    type: databin
+    start: 0x406F80
+
+  - [0x407130]

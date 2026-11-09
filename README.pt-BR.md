@@ -5,7 +5,8 @@
 [![Listed on PlayPorted](https://playported.com/badge.svg)](https://playported.com/ports/1243-saint-seiya-the-hades/)
 [![CI](https://github.com/matpdev/SaintSeiyaRecomp/actions/workflows/ci.yml/badge.svg)](https://github.com/matpdev/SaintSeiyaRecomp/actions/workflows/ci.yml)
 
-Port nativo para PC (Linux e Windows) de **Saint Seiya: The Hades** (PS2, Europa, SLES-54162), feito por
+Port nativo para PC (Linux e Windows) de **Saint Seiya: The Hades** (PS2, Europa, SLES-54162, e a versão
+japonesa, Meiou Hades Juunikyuu-hen, SLPS-25744), feito por
 recompilação estática, com uma decompilação matching avançando em paralelo. O modelo é o
 [Tenkaichi3Decomp](https://github.com/z3xox/Tenkaichi3Decomp).
 
@@ -43,7 +44,8 @@ Detalhes técnicos (em inglês) em [`docs/roadmap.md`](docs/roadmap.md) e [`docs
 
 ## Jogar (só o port)
 
-Você precisa da **sua própria cópia** do jogo: Saint Seiya: The Hades, **versão europeia (SLES-54162)**. Nenhum dado
+Você precisa da **sua própria cópia** do jogo: Saint Seiya: The Hades, **versão europeia (SLES-54162)** ou
+**versão japonesa (SLPS-25744, Meiou Hades Juunikyuu-hen, 2007)**: um só executável joga as duas, o disco decide. Nenhum dado
 do jogo está neste repositório. A tradução brasileira de fãs é outro build (comprimido com SjCRUNCH) e não serve.
 
 **Pronto para jogar:** os [releases](https://github.com/matpdev/SaintSeiyaRecomp/releases) têm um zip para Windows e um
@@ -240,6 +242,7 @@ depuração: [docs/depuracao.pt-BR.md](docs/depuracao.pt-BR.md).
 | `config/symbol_addrs.txt` | nomes conhecidos (`nome = 0xENDEREÇO; // type:func`) |
 | `asm/`, `assets/` | gerados pelo splat (ignorados pelo git) |
 | `generated/` | o código do jogo traduzido para C: `recomp/` (o código MIPS, `tools/recomp/recomp.py`), `vu/` (os programas de VU1); refeito a partir do `disc/SLES_541.62` quando ele existe |
+| `config/jp/`, `generated-jp/` | a versão japonesa: a configuração do splat, o `hle.txt` e o código traduzido (refeito a partir do `disc/SLPS_257.44`); os endereços dela são a segunda coluna do `port/hle/game.h`, achados com o `tools/version_map.py` |
 | `src/`, `include/` | código decompilado (C++) |
 | `tools/recomp/` | recompilador estático MIPS → C |
 | `port/runtime/`, `port/kernel/` | CPU, memória, timers, syscalls do kernel |

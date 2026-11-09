@@ -8,8 +8,9 @@
 #include "r5900.h"
 #include "runtime.h"
 
-extern const FuncEntry rt_functab[];
-extern const int rt_functab_count;
+/* the translated code of the release loaded (game_select, port/hle/game.c) */
+const FuncEntry *rt_functab;
+int rt_functab_count;
 
 const FuncEntry *rt_find(u32 addr) {
     int lo = 0, hi = rt_functab_count - 1;

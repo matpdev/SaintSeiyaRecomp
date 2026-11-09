@@ -1,12 +1,13 @@
 /*
  * Saint Seiya: The Hades, native: entry point.
  *
- *     sstheh [SLES_541.62] [--iso game.iso] [-q | -v]
+ *     sstheh [SLES_541.62 | SLPS_257.44] [--iso game.iso] [-q | -v]
  *     sstheh --compile-vu     compile the VU1 programs ahead of time, then exit
  *     sstheh --gs-replay file [warm]   replay a recording of the GS thread's work (port/gs/gsrec.c)
  *
  * Loads the executable's data into guest RAM (the code itself is the recompiled C linked into this
- * program) and starts the main thread at the ELF entry point.
+ * program: the European release's and the Japanese one's, picked by the executable, port/hle/game.c)
+ * and starts the main thread at the ELF entry point.
  */
 #define _GNU_SOURCE   /* pthread_setname_np */
 #include <pthread.h>
@@ -19,8 +20,11 @@
 #include "runtime.h"
 #include "kernel.h"
 #include "platform.h"
+#include "../hle/game.h"
 
 int cdvd_open(const char *path);
+int cdvd_find(const char *path, u32 *lsn, u32 *size);
+int cdvd_read(u32 lsn, u32 count, u8 *out);
 int display_window(void);
 void prof_start(void);
 void perf_calibrate(void);
@@ -30,6 +34,39 @@ int vu_jit_ahead(int wait, int *queued);
 int gsrec_replay(const char *path, int warm);
 
 static u32 entry;
+
+/* The executable the disc boots (SYSTEM.CNF: BOOT2 = cdrom0:\NAME;1), for disc/NAME: with both releases'
+ * executables in disc/, the one of the image opened. NULL when it can't be read. */
+static const char *boot_name(void) {
+    static char name[32];
+    u32 lsn, size;
+    u8 buf[2048];
+    if (!cdvd_find("\\SYSTEM.CNF;1", &lsn, &size) || cdvd_read(lsn, 1, buf)) return NULL;
+    buf[size < sizeof buf ? size : sizeof buf - 1] = 0;
+    const char *p = strstr((const char *)buf, "cdrom0:\\");
+    if (!p) return NULL;
+    p += 8;
+    int n = 0;
+    while (p[n] && p[n] != ';' && p[n] != '\r' && p[n] != '\n' && n < (int)sizeof name - 1) { name[n] = p[n]; n++; }
+    name[n] = 0;
+    return n ? name : NULL;
+}
+
+/* which release the executable is (port/hle/game.c): 0, or 1 when it is none the port was made from */
+static int select_release(const char *elf) {
+    FILE *f = fopen(elf, "rb");
+    if (!f) return 1;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    u8 *b = malloc(n > 0 ? (size_t)n : 1);
+    int ok = n > 0 && fread(b, 1, (size_t)n, f) == (size_t)n && game_select(b, (u32)n) >= 0;
+    free(b);
+    fclose(f);
+    if (!ok) fprintf(stderr, "%s is not an executable this port was made from: the European (SLES_541.62) "
+                             "or the Japanese (SLPS_257.44) release, unmodified\n", elf);
+    return !ok;
+}
 
 static void *game_main(void *arg) {
     (void)arg;
@@ -60,7 +97,7 @@ static const char *disc_file(const char *name) {
 }
 
 int main(int argc, char **argv) {
-    const char *elf = disc_file("SLES_541.62"), *iso = disc_file("game.iso");
+    const char *elf = NULL, *iso = disc_file("game.iso");
     int shots[64], nshots = 0, compile_vu = 0, warm = 30;
     const char *replay = NULL;
     const char *gen_vu = NULL;          /* the build: the game's VU1 programs written as C (port/gs/vu_jit.c) */
@@ -86,21 +123,28 @@ int main(int argc, char **argv) {
         }
         else elf = argv[i];
     }
+    if (gen_vu && !elf) elf = disc_file("SLES_541.62");
     if (gen_vu) {                       /* only the executable is needed */
         int vu_jit_generate(const char *dir);
         memory_init();
         if (memory_load_elf(elf, &entry)) { fprintf(stderr, "cannot load %s\n", elf); return 1; }
+        if (select_release(elf)) return 1;
         return vu_jit_generate(gen_vu);
     }
     if (cdvd_open(iso)) {
         fprintf(stderr, "cannot open the disc image %s (use --iso <file>)\n", iso);
         return 1;
     }
+    if (!elf) {                         /* the executable the disc boots: disc/SLES_541.62 or disc/SLPS_257.44 */
+        const char *b = boot_name();
+        elf = disc_file(b ? b : "SLES_541.62");
+    }
     memory_init();
     if (memory_load_elf(elf, &entry)) {
         fprintf(stderr, "cannot load %s\n", elf);
         return 1;
     }
+    if (select_release(elf)) return 1;
     rt_log("main", "loaded %s, entry %08X", elf, entry);
     {
         /* the VU1 programs not compiled yet are compiled in the background from the start */

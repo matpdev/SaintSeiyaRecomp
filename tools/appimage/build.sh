@@ -19,6 +19,7 @@ ff = pc("--cflags", "libavformat", "libavcodec", "libavutil", "libswscale", "lib
 ft = pc("--cflags", "freetype2")
 libs = pc("--libs", "sdl3", "libavformat", "libavcodec", "libavutil", "libswscale", "libswresample", "freetype2")
 srcs = sorted(glob.glob("generated/recomp/rc_*.c")) + ["generated/recomp/functab.c"]
+srcs += sorted(glob.glob("generated-jp/recomp/rc_*.c")) + ["generated-jp/recomp/functab.c"]
 srcs += sorted(glob.glob("port/**/*.c", recursive=True)) + sorted(glob.glob("generated/vu/*.c"))
 with open("build-rel.ninja", "w") as f:
     f.write(f"rule cc\n  command = gcc -c -O1 {flags} {inc} -MMD -MF $out.d $in -o $out\n  depfile = $out.d\n  deps = gcc\n")
@@ -27,7 +28,7 @@ with open("build-rel.ninja", "w") as f:
     objs = []
     for s in srcs:
         o = "build-rel/obj/" + s.replace("/", "_")[:-2] + ".o"
-        if s.startswith("generated/recomp/"):
+        if s.startswith(("generated/recomp/", "generated-jp/recomp/")):
             f.write(f"build {o}: cc {s}\n")
         else:
             extra = "-DSSTHEH_FFMPEG " + ff if s == "port/hle/movie.c" else "-DSSTHEH_FREETYPE " + ft if s == "port/hle/textfont.c" else ""

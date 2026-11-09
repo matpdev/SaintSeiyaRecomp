@@ -1,5 +1,6 @@
 #!/bin/sh
-# Builds the port from your own disc image (Saint Seiya: The Hades, Europe, SLES-54162).
+# Builds the port from your own disc image of Saint Seiya: The Hades: the European release (SLES-54162)
+# or the Japanese one (SLPS-25744, Meiou Hades Juunikyuu-hen).
 #
 #   ./build.sh                    asks for the ISO (a file picker if there is one, or in the terminal)
 #   ./build.sh game.iso           uses that ISO
@@ -53,25 +54,24 @@ fi
 
 # ---------------------------------------------------------------------------------- the disc
 mkdir -p disc
-if [ -z "$ISO" ] && [ -e disc/game.iso ] && [ -f disc/SLES_541.62 ]; then
+if [ -z "$ISO" ] && [ -e disc/game.iso ] && { [ -f disc/SLES_541.62 ] || [ -f disc/SLPS_257.44 ]; }; then
     ok "disc already prepared (disc/game.iso)"
 else
     if [ -z "$ISO" ]; then
         if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v zenity >/dev/null; then
-            ISO=$(zenity --file-selection --title="Pick the Saint Seiya: The Hades ISO (Europe)" \
+            ISO=$(zenity --file-selection --title="Pick the Saint Seiya: The Hades ISO (Europe or Japan)" \
                   --file-filter="Disc images | *.iso *.ISO" 2>/dev/null) || fail "no ISO picked"
         elif [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v kdialog >/dev/null; then
             ISO=$(kdialog --getopenfilename "$HOME" "*.iso *.ISO|Disc images" 2>/dev/null) || fail "no ISO picked"
         else
-            printf 'Path to the ISO (Saint Seiya: The Hades, Europe, SLES-54162): '
+            printf 'Path to the ISO (Saint Seiya: The Hades, Europe SLES-54162 or Japan SLPS-25744): '
             read -r ISO
         fi
     fi
     [ -f "$ISO" ] || fail "file not found: $ISO"
     ISO=$(realpath "$ISO")
     info "checking $ISO"
-    python3 tools/disc.py "$ISO" disc/SLES_541.62.new || { rm -f disc/SLES_541.62.new; fail "this ISO can't be used"; }
-    mv disc/SLES_541.62.new disc/SLES_541.62
+    python3 tools/disc.py "$ISO" disc || fail "this ISO can't be used"
     ln -sfn "$ISO" disc/game.iso
     ok "disc/game.iso → $ISO"
 fi

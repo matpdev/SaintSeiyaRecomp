@@ -21,11 +21,29 @@
 
 static FILE *iso;
 static int last_error;
+static u32 stride = SECTOR, skip;            /* the image's sectors: their size and where the 2048 bytes are */
+
+/* The image's layout, from where the primary volume descriptor (sector 16, "\1CD001") is: 2048-byte
+ * sectors (an ISO), 2448 (2048 and 400 more: some dumps), 2352 (raw CD sectors, Mode 1 / Mode 2 form 1) */
+static int find_layout(void) {
+    static const u32 layouts[][2] = {{2048, 0}, {2448, 0}, {2352, 16}, {2352, 24}};
+    for (u32 i = 0; i < sizeof layouts / sizeof *layouts; i++) {
+        u8 b[6];
+        if (!fseeko(iso, (off_t)16 * layouts[i][0] + layouts[i][1], SEEK_SET) && fread(b, 1, 6, iso) == 6 &&
+            !memcmp(b, "\1CD001", 6)) {
+            stride = layouts[i][0];
+            skip = layouts[i][1];
+            return 0;
+        }
+    }
+    return -1;
+}
 
 int cdvd_open(const char *path) {
     iso = fopen(path, "rb");
     if (!iso) return -1;
-    rt_log("cdvd", "disc image %s", path);
+    if (find_layout()) { rt_log("cdvd", "%s: no ISO 9660 volume in it", path); fclose(iso); iso = NULL; return -1; }
+    rt_log("cdvd", "disc image %s%s", path, stride == SECTOR ? "" : stride == 2448 ? " (2448-byte sectors)" : " (raw sectors)");
     return 0;
 }
 
@@ -34,7 +52,13 @@ static pthread_mutex_t iso_lock = PTHREAD_MUTEX_INITIALIZER;   /* the EE and the
 static int read_sectors(u32 lsn, u32 count, u8 *out) {
     if (!iso) return -1;
     pthread_mutex_lock(&iso_lock);
-    int ok = !fseeko(iso, (off_t)lsn * SECTOR, SEEK_SET) && fread(out, SECTOR, count, iso) == count;
+    int ok;
+    if (stride == SECTOR) ok = !fseeko(iso, (off_t)lsn * SECTOR, SEEK_SET) && fread(out, SECTOR, count, iso) == count;
+    else {
+        ok = 1;
+        for (u32 i = 0; i < count && ok; i++)
+            ok = !fseeko(iso, (off_t)(lsn + i) * stride + skip, SEEK_SET) && fread(out + (size_t)i * SECTOR, SECTOR, 1, iso) == 1;
+    }
     pthread_mutex_unlock(&iso_lock);
     return ok ? 0 : -1;
 }

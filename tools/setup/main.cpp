@@ -2,12 +2,12 @@
  * The release's setup for the Saint Seiya: The Hades PC port.
  *
  * The release is the port's executable (sstheh) without anything from the game: the player brings
- * their own disc image of the European release (SLES-54162). This program
- *   - checks the image: ISO 9660, its SYSTEM.CNF boots SLES_541.62, and that executable is exactly
- *     the one the port was translated from (SHA-1); the whole image's SHA-1 is compared with the
- *     known good dump (Redump) only to tell the player;
- *   - copies it next to the game (disc/game.iso) and writes the executable out (disc/SLES_541.62),
- *     where the game looks for them;
+ * their own disc image of the European release (SLES-54162) or the Japanese one (SLPS-25744). This program
+ *   - checks the image: ISO 9660 (2048-byte sectors, or the 2448 / 2352 of some dumps), it holds
+ *     SLES_541.62 or SLPS_257.44, and that executable is exactly the one the port was translated from
+ *     (SHA-1); the European image's SHA-1 is compared with the known good dump (Redump) only to tell;
+ *   - copies it next to the game (disc/game.iso) and writes the executable out (disc/SLES_541.62 or
+ *     disc/SLPS_257.44), where the game looks for them;
  *   - downloads the font the game's texts are drawn with (fonts/, M PLUS Rounded 1c, OFL);
  *   - keeps the widescreen choice where the game reads it, and can make a shortcut;
  *   - starts the game.
@@ -51,11 +51,17 @@
 #include <QStorageInfo>
 #include <QVBoxLayout>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <thread>
 
-static const char *const ELF_SHA1 = "7ba6b0a1c05a94f28452840fcb73c204e46e79e6";     /* config/SLES_541.62.sha1 */
+static const struct Release {
+    const char *elf, *sha1, *name;
+} RELEASES[] = {
+    {"SLES_541.62", "7ba6b0a1c05a94f28452840fcb73c204e46e79e6", "Saint Seiya: The Hades (Europe, SLES-54162)"},       /* config/SLES_541.62.sha1 */
+    {"SLPS_257.44", "e9f3f2390705e17813c8013346d930f31317d468", "Saint Seiya: Meiou Hades Juunikyuu-hen (Japan, SLPS-25744)"},  /* config/jp/ */
+};
 static const char *const ISO_SHA1 = "6da748b0a966a884fc08b3d0d56ffb1bf51848c7";     /* Redump: (Europe) (En,Ja,Fr,Es,It) */
 static const char *const FONT_FILE = "MPLUSRounded1c-Bold.ttf";
 static const char *const FONT_URL = "https://raw.githubusercontent.com/google/fonts/main/ofl/mplusrounded1c/MPLUSRounded1c-Bold.ttf";
@@ -104,21 +110,43 @@ static QString config_dir() {
 struct Disc {
     bool ok = false;
     QString message;            /* why not, or what it is */
-    QByteArray elf;             /* SLES_541.62 */
+    QByteArray elf;             /* the executable */
+    QString elf_name;           /* SLES_541.62 or SLPS_257.44 */
+    bool europe = false;
     qint64 size = 0;
 };
 
+/* The image's sectors: 2048 bytes (an ISO), or 2448 / 2352 with the 2048 at an offset (some dumps). The
+ * game reads every layout, so the image is copied as it is. */
+static qint64 stride = 2048, skip = 0;
+static bool find_layout(QFile &f) {
+    static const qint64 layouts[][2] = {{2048, 0}, {2448, 0}, {2352, 16}, {2352, 24}};
+    for (auto &l : layouts) {
+        f.seek(16 * l[0] + l[1]);
+        if (f.read(6) == QByteArray("\1CD001", 6)) { stride = l[0]; skip = l[1]; return true; }
+    }
+    return false;
+}
+static QByteArray read_at(QFile &f, quint32 lsn, quint32 size) {
+    QByteArray out;
+    for (quint32 i = 0; out.size() < (qint64)size; i++) {
+        f.seek((lsn + i) * stride + skip);
+        QByteArray b = f.read(2048);
+        if (b.isEmpty()) break;
+        out += b;
+    }
+    return out.left(size);
+}
+
 /* a file in the image's root directory: its first sector and size */
 static bool find_root(QFile &f, const char *name, quint32 *lsn, quint32 *size) {
-    f.seek(16 * 2048);
-    QByteArray pvd = f.read(2048);
+    QByteArray pvd = read_at(f, 16, 2048);
     if (pvd.size() < 2048 || pvd.mid(1, 5) != "CD001") return false;
     auto u32 = [](const QByteArray &b, int o) {
         return quint32((uchar)b[o]) | quint32((uchar)b[o + 1]) << 8 | quint32((uchar)b[o + 2]) << 16 | quint32((uchar)b[o + 3]) << 24;
     };
     quint32 rl = u32(pvd, 156 + 2), rs = u32(pvd, 156 + 10);
-    f.seek(qint64(rl) * 2048);
-    QByteArray d = f.read(rs);
+    QByteArray d = read_at(f, rl, rs);
     for (int off = 0; off < d.size();) {
         int n = (uchar)d[off];
         if (!n) { off = (off / 2048 + 1) * 2048; continue; }
@@ -135,34 +163,28 @@ static Disc check_disc(const QString &path) {
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) { r.message = T("The file can't be opened.", "O arquivo não pode ser aberto."); return r; }
     r.size = f.size();
-    quint32 lsn, size;
-    f.seek(16 * 2048);
-    if (f.read(6).mid(1, 5) != "CD001") { r.message = T("This is not a disc image (ISO 9660).", "Isto não é uma imagem de disco (ISO 9660)."); return r; }
-    if (find_root(f, "SYSTEM.CNF", &lsn, &size)) {
-        f.seek(qint64(lsn) * 2048);
-        if (!f.read(size).contains("SLES_541.62")) {
-            r.message = T("This disc is another game or another region: the European release (SLES-54162) is needed.",
-                          "Este disco é de outro jogo ou outra região: é preciso a versão europeia (SLES-54162).");
+    if (!find_layout(f)) { r.message = T("This is not a disc image (ISO 9660).", "Isto não é uma imagem de disco (ISO 9660)."); return r; }
+    for (const Release &rel : RELEASES) {
+        quint32 lsn, size;
+        if (!find_root(f, rel.elf, &lsn, &size)) continue;
+        r.elf = read_at(f, lsn, size);
+        if (QCryptographicHash::hash(r.elf, QCryptographicHash::Sha1).toHex() != rel.sha1) {
+            r.message = T("This disc's executable is another build (a modified or translated version, like the Brazilian "
+                          "fan translation): the port needs the original European or Japanese release.",
+                          "O executável deste disco é outro build (uma versão modificada ou traduzida, como a tradução "
+                          "brasileira de fãs): o port precisa da versão europeia ou japonesa original.");
             return r;
         }
-    }
-    if (!find_root(f, "SLES_541.62", &lsn, &size)) {
-        r.message = T("This disc is another game or another region: the European release (SLES-54162) is needed.",
-                      "Este disco é de outro jogo ou outra região: é preciso a versão europeia (SLES-54162).");
+        r.ok = true;
+        r.elf_name = rel.elf;
+        r.europe = !strcmp(rel.elf, "SLES_541.62");
+        r.message = QString::fromUtf8(rel.name) + ": OK.";
         return r;
     }
-    f.seek(qint64(lsn) * 2048);
-    r.elf = f.read(size);
-    if (QCryptographicHash::hash(r.elf, QCryptographicHash::Sha1).toHex() != ELF_SHA1) {
-        r.message = T("This disc's executable is another build (a modified or translated version, like the Brazilian "
-                      "fan translation): the port needs the original European release.",
-                      "O executável deste disco é outro build (uma versão modificada ou traduzida, como a tradução "
-                      "brasileira de fãs): o port precisa da versão europeia original.");
-        return r;
-    }
-    r.ok = true;
-    r.message = T("Saint Seiya: The Hades, European release (SLES-54162): OK.",
-                  "Saint Seiya: The Hades, versão europeia (SLES-54162): OK.");
+    r.message = T("This disc is another game or another region: the European (SLES-54162) or the Japanese (SLPS-25744) "
+                  "release is needed.",
+                  "Este disco é de outro jogo ou outra região: é preciso a versão europeia (SLES-54162) ou a japonesa "
+                  "(SLPS-25744).");
     return r;
 }
 
@@ -176,7 +198,7 @@ struct Options {
  * *sha1. Empty: done; else what went wrong. */
 static QString copy_disc(const QString &iso, const Disc &disc, QByteArray *sha1, const std::function<void(qint64, qint64)> &progress) {
     make_path(disc_dir());
-    QSaveFile elf(disc_dir() + "/SLES_541.62");
+    QSaveFile elf(disc_dir() + "/" + disc.elf_name);
     if (!elf.open(QIODevice::WriteOnly) || elf.write(disc.elf) != disc.elf.size() || !elf.commit())
         return T("Can't write into %1.", "Não foi possível gravar em %1.").arg(disc_dir());
     QString dst = disc_dir() + "/game.iso";
@@ -274,7 +296,8 @@ static void make_shortcut() {
 #endif
 }
 
-static QString sha1_note(const QByteArray &sha1) {
+static QString sha1_note(const QByteArray &sha1, bool europe) {
+    if (!europe) return QString();          /* no reference dump known for the Japanese release's images */
     return sha1 == ISO_SHA1 ? T("The whole image matches the known good dump (Redump).",
                                 "A imagem inteira confere com o dump de referência (Redump).")
                             : T("The image differs from the known good dump (Redump), but its executable is the right one: "
@@ -285,8 +308,12 @@ static QString sha1_note(const QByteArray &sha1) {
 
 static bool installed() {
     if (!QFileInfo(disc_dir() + "/game.iso").exists()) return false;
-    QFile f(disc_dir() + "/SLES_541.62");
-    return f.open(QIODevice::ReadOnly) && QCryptographicHash::hash(f.readAll(), QCryptographicHash::Sha1).toHex() == ELF_SHA1;
+    for (const Release &rel : RELEASES) {
+        QFile f(disc_dir() + "/" + rel.elf);
+        if (f.open(QIODevice::ReadOnly) && QCryptographicHash::hash(f.readAll(), QCryptographicHash::Sha1).toHex() == rel.sha1)
+            return true;
+    }
+    return false;
 }
 
 /* ------------------------------------------------------------------------------- without a window */
@@ -303,7 +330,7 @@ static int install_cli(const QString &iso, const Options &o) {
         if (pct / 10 != last / 10) { last = pct; say(T("copying the image: %1%", "copiando a imagem: %1%").arg(pct)); }
     });
     if (!err.isEmpty()) { say(err); return 3; }
-    say(sha1_note(sha1));
+    if (!sha1_note(sha1, d.europe).isEmpty()) say(sha1_note(sha1, d.europe));
     if (o.font) { QString e = download_font(); say(e.isEmpty() ? T("Font ready.", "Fonte pronta.") : e); }
     write_settings(o);
     if (o.shortcut) make_shortcut();
@@ -508,8 +535,8 @@ public:
     }
     void empty() {
         name->setText(T("Drop your ISO here, or click to choose it", "Arraste a sua ISO para cá, ou clique para escolher"));
-        where->setText(T("Saint Seiya: The Hades, European release (SLES-54162), .iso",
-                         "Saint Seiya: The Hades, versão europeia (SLES-54162), .iso"));
+        where->setText(T("Saint Seiya: The Hades, European (SLES-54162) or Japanese (SLPS-25744) release, .iso",
+                         "Saint Seiya: The Hades, versão europeia (SLES-54162) ou japonesa (SLPS-25744), .iso"));
     }
     void file(const QString &path) {
         QFileInfo fi(path);
@@ -720,7 +747,7 @@ private:
     void copied(const QString &err, QByteArray *sha1, const Options &o) {
         QStringList notes;
         if (err.isEmpty()) {
-            notes << sha1_note(*sha1);
+            if (!sha1_note(*sha1, disc.europe).isEmpty()) notes << sha1_note(*sha1, disc.europe);
             if (o.font) {
                 step->setText(T("Downloading the font…", "Baixando a fonte…"));
                 QString e = download_font();

@@ -36,6 +36,16 @@ player's own `SLES_541.62` when the game starts. So the port builds without a di
 release packages that way, `tools/release.sh`); with one, `configure.py` makes `generated/` again whenever the
 translator changes, and the change is committed like any other. The output is the same on every machine.
 
+**Two releases, one executable.** The Japanese release (SLPS_257.44, 2007) goes through the same pipeline
+(`config/jp/slps_257.44.yaml`, `config/jp/hle.txt`, into `generated-jp/` with its functions named
+`JP_F_XXXXXXXX`). The disc picks: `main.c` loads the executable its `SYSTEM.CNF` boots, and
+`game_select` (`port/hle/game.c`) recognises it by its content, points the CPU's dispatch (`cpu.c`) at that
+release's translated code and fills `game_addr`, the column of `port/hle/game.h` the native code reads its
+addresses from. The Japanese column was found with `tools/version_map.py`: 98% of the European functions are
+in the Japanese executable, shifted; its variables come from the addresses the matching code builds. The SDK
+and CRI libraries are identical; about 180 of the game's functions changed (the damage and the battle step
+among them).
+
 Every guest function becomes `void F_XXXXXXXX(Ctx *c)`. `Ctx` holds the EE's registers; `RW(n)` is
 register n's low 32 bits, `SET32(n, v)` sets it, `F(n)` is a float register, `rd32(c, addr)` /
 `wr32(c, addr, v)` read and write the PS2's memory (`port/runtime/r5900.h`). A call to an address

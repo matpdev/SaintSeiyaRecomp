@@ -1,0 +1,55 @@
+# The Japanese release (SLPS_257.44): the guest functions replaced by native ones, as port/hle.txt is
+# for the European one. Found from it by tools/version_map.py (the same function in this executable);
+# the movie step, the battle step and the damage changed in this release and were found by hand.
+0x00110C28 hle_tty_write   # EU 0x00110C28 (match)  SDK: write text to the Deci2 TTY (debug console), (buf, len) -> len
+0x00123250 hle_sceCdInit   # EU 0x00123250 (match)
+0x00123930 hle_sceCdRead   # EU 0x00123930 (match)
+0x00122F20 hle_sceCdSync   # EU 0x00122F20 (match)
+0x001229E0 hle_sceCdSearchFile   # EU 0x001229E0 (match)
+0x00123530 hle_sceCdDiskReady   # EU 0x00123530 (match)
+0x00123728 hle_sceCdDiskReady   # EU 0x00123728 (match)  second variant (server 0x8000059C), answers the same
+0x00123BE0 hle_sceCdGetDiskType   # EU 0x00123BE0 (match)
+0x00123C78 hle_sceCdGetError   # EU 0x00123C78 (match)
+0x00123D10 hle_sceCdBreak   # EU 0x00123D10 (match)
+0x00123DC8 hle_sceCdMmode   # EU 0x00123DC8 (match)
+0x00251820 hle_cri_print   # EU 0x0024E8D0 (match)  CRI debug printf (fmt, ...); prints at debug level 2 only
+0x002AA820 hle_frame_lines   # EU 0x002A78D0 (match)  scanlines this frame has used, for the time-sliced loaders: see port/hle/frame.c
+0x002C2AE0 hle_video_mode   # EU 0x002BFA80 (match)  sets the video mode (D_0050022C): 1 (NTSC, 60 Hz) instead of the region's 2 (PAL): see port/hle/frame.c
+0x0017A7B0 hle_csel_portraits   # EU 0x001798C0 (match)  character select: the portraits along the strips, more of them in widescreen: see port/hle/charselect.c
+0x00138B20 hle_set_frame_wait   # EU 0x00138B20 (between)  scenes asking for a frame per two vertical blanks run at the full rate: see port/hle/frame.c
+0x00132320 hle_mc2_getinfo   # EU 0x00132320 (match)
+0x001326B0 hle_mc2_format   # EU 0x001326B0 (match)
+0x00132FA8 hle_mc2_unformat   # EU 0x00132FA8 (match)
+0x001337D8 hle_mc2_read   # EU 0x001337D8 (match)
+0x001347F0 hle_mc2_write   # EU 0x001347F0 (match)
+0x00134230 hle_mc2_create   # EU 0x00134230 (match)
+0x00134D10 hle_mc2_delete   # EU 0x00134D10 (match)
+0x00135690 hle_mc2_rename   # EU 0x00135690 (match)
+0x00135108 hle_mc2_getdir   # EU 0x00135108 (match)
+0x00134F80 hle_mc2_chdir   # EU 0x00134F80 (match)
+0x00135578 hle_mc2_chmod   # EU 0x00135578 (match)
+0x00133320 hle_mc2_lookup   # EU 0x00133320 (match)
+0x001374F0 hle_mc2_request   # EU 0x001374F0 (between)
+0x002A3DA0 hle_widescreen_view before   # EU 0x002A0E50 (match)  camera set_view_screen: ax * 3/4 for 16:9, see port/hle/widescreen.c
+0x00100A20 hle_heap_free before   # EU 0x00100A20 (match)  allocator free (allocator, p): SSTHEH_POISON_FREE=1 fills the block, see port/hle/heap.c
+0x00304350 hle_training_controller before   # EU 0x002FF490 (match)  controllers' common step: the computer's decision cleared for an idle opponent
+0x00100530 hle_csel_alloc before   # EU 0x00100530 (match)  malloc: the character select's elements, more of them, see port/hle/charselect.c
+0x00102580 hle_csel_array before   # EU 0x00102580 (match)  new[]: the same, constructed by the game
+0x0017AC70 hle_csel_borders_init before   # EU 0x00179D80 (match)  character select: border pieces' set-up (the new ones too)
+0x0017AAE0 hle_csel_borders_place before   # EU 0x00179BF0 (match)  character select: border pieces' places
+0x0017B0D0 hle_csel_lists before   # EU 0x0017A1E0 (match)  character select: elements into the draw lists
+0x00141B90 hle_csel_closing before   # EU 0x001419B0 (match)  in a draw list?: from the closing character select, the new pieces taken out
+0x0017AF20 hle_csel_show before   # EU 0x0017A030 (match)  character select: everything shown or hidden
+0x00304890 hle_mash_any before   # EU 0x002FF9D0 (match)  player controller: any button pressed? (Big Bang events: auto-mash, see port/hle/bigbang.c)
+0x00304820 hle_mash_face before   # EU 0x002FF960 (match)  player controller: which face button pressed?
+0x00304760 hle_mash_face before   # EU 0x002FF8A0 (match)  player controller: which face button pressed? (second one)
+0x003047D0 hle_mash_some before   # EU 0x002FF910 (match)  player controller: one of these buttons pressed?
+0x002F74F0 hle_revival_check before   # EU 0x002F2630 (match)  round's end check: with revival off, a fighter at life 0 is knocked out (port/hle/bigbang.c)
+0x00156990 hle_text_blit before   # EU 0x00155E40 (match)  a glyph written into a text's canvas: remembered to draw it with a font file, see port/hle/textfont.c
+0x00319EB0 hle_com_face   # EU 0x00315070 (match)  computer controller: which face button? (a draw); none for the Big Bang Counter when it is off, see port/hle/bigbang.c
+0x00225FC0 hle_training_menu_texts before   # EU 0x00224180 (match)  a list of texts: the character select's mode menu gets "Training" (port/hle/training.c)
+0x0013BA20 hle_training_menu_cursor before   # EU 0x0013BA20 (match)  a list's cursor set: the mode menu's first one stays on "Back to main menu"
+0x0013DDF0 hle_training_menu_chosen before   # EU 0x0013DC10 (between)  an owner told: the mode menu's choice, "Training" = 1P VS COM with training on
+0x002C6780 hle_movie_step   # EU 0x002C3740: found by its use of the movie names table (rewritten in JP: 3 videos)
+0x002FDEF0 hle_training_battle before   # EU 0x002F9140: next to the matched 0x002FDDE0 (0x18 bytes longer)
+0x00323370 hle_training_damage before   # EU 0x0031E5F0: before the matched 0x003234A0 (0x34 bytes longer)

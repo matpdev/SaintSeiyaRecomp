@@ -43,6 +43,7 @@
 #include "vu.h"
 #include "vu_internal.h"
 #include "perf.h"
+#include "../hle/game.h"
 
 #define NPAIRS (0x4000 / 8)
 #define GEN_VERSION 12          /* of the C written: part of the keys */
@@ -1171,14 +1172,14 @@ int vu_jit_run(Vu *v) {
 
 /* ------------------------------------------------------------------------------- ahead of time
  *
- * All the game's VU1 code is in its executable: DMA packets of MPGs at 0x3C6F80. The first packet
+ * All the game's VU1 code is in its executable: DMA packets of MPGs at D_VU1_MICROCODE (0x3C6F80 in the European release). The first packet
  * is the resident part (from 0); each of the others is an overlay the game loads right after it.
  * For the resident part alone and with each overlay, the programs are taken from where they can
  * start: the first pair, the pair after each program's end (E bit) or JR (the next subroutine),
  * where JALRs return, and the constants put in integer registers (where JR goes). Those not compiled yet are compiled in the background, after
  * the ones the game is waiting for. */
 
-#define MICROCODE_AT 0x3C6F80u
+#define MICROCODE_AT D_VU1_MICROCODE     /* port/hle/game.h: per release */
 #define MICROCODE_LEN 62848u
 
 /* Writes the MPGs of the DMA packet at pk into code[] (at base + their address); the end of what

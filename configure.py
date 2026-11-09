@@ -27,6 +27,11 @@ GEN = "generated"      # the translated code, in git: generated/recomp (tools/re
 OUT = "build/SLES_541.62"
 
 RC_FILES = 35          # number of rc_NNN.c files tools/recomp/recomp.py writes (13855 functions / 400)
+# The Japanese release (SLPS-25744), translated into the same executable (its functions JP_F_...; the
+# executable loaded picks the release, port/hle/game.c). Its code is in generated-jp/, made again from
+# disc/SLPS_257.44 when there is one.
+JP = dict(target="disc/SLPS_257.44", yaml="config/jp/slps_257.44.yaml", asm="asm-jp", gen="generated-jp",
+          hle="config/jp/hle.txt", data="3DCC80,506F00", files=35)
 AS_FLAGS = "-EL -march=r5900 -mabi=eabi -G0 -no-pad-sections -Iinclude"
 
 
@@ -47,6 +52,11 @@ def main():
         print(f"no {TARGET}: the port is built from {GEN}/ as it is (no split, no translation)")
     elif not args.no_split:
         subprocess.run([sys.executable, "-m", "splat", "split", YAML], check=True)
+
+    have_jp = os.path.exists(JP["target"])
+    if have_jp and not args.no_split:
+        subprocess.run([sys.executable, "-m", "splat", "split", JP["yaml"]], check=True)
+    jp_code = sorted(glob.glob(f"{JP['asm']}/*.s")) if have_jp else []
 
     sources = sorted(glob.glob("asm/**/*.s", recursive=True)) if have_elf else []
     bins = sorted(b for b in glob.glob("assets/**/*.bin", recursive=True) if not b.endswith(".databin.bin")) if have_elf else []
@@ -82,7 +92,7 @@ def main():
 
         # ---- native port: recompiled code + runtime (see docs/roadmap.md)
         code = [s for s in sources if not s.startswith("asm/data/")]
-        n.rule("recomp", f"{sys.executable} -I tools/recomp/recomp.py {TARGET} {GEN}/recomp $in",
+        n.rule("recomp", f"RECOMP_TABLE=eu_functab {sys.executable} -I tools/recomp/recomp.py {TARGET} {GEN}/recomp $in",
                description="recomp", restat=True)
         inc = f"-Iport/runtime -Iport/kernel -Iport/iop -Iport/gs -I{GEN}/recomp -Ibuild/shaders"
         # the translated code builds fast at -O1, without warnings (it is generated); the runtime and the
@@ -122,11 +132,18 @@ def main():
         rc_files = [f"{GEN}/recomp/rc_{k:03d}.c" for k in range(RC_FILES)] + [f"{GEN}/recomp/functab.c"]
         if have_elf:
             n.build(rc_files, "recomp", code, implicit=["tools/recomp/recomp.py", "port/hle.txt"])
+        jp_files = [f"{JP['gen']}/recomp/rc_{k:03d}.c" for k in range(JP["files"])] + [f"{JP['gen']}/recomp/functab.c"]
+        if have_jp:
+            n.rule("recomp_jp", f"RECOMP_PREFIX=JP_ RECOMP_TABLE=jp_functab RECOMP_DATA={JP['data']} RECOMP_HLE={JP['hle']} "
+                                f"{sys.executable} -I tools/recomp/recomp.py {JP['target']} {JP['gen']}/recomp $in",
+                   description="recomp (Japan)", restat=True)
+            n.build(jp_files, "recomp_jp", jp_code, implicit=["tools/recomp/recomp.py", JP["hle"]])
+        rc_files += jp_files
         port_srcs = sorted(glob.glob("port/**/*.c", recursive=True))
         port_objs = []
         for src in rc_files + port_srcs:
             o = "build/port/" + src.replace("/", "_")[:-2] + ".o"
-            rule = ("cc" if src.startswith(f"{GEN}/") else "cc_ffmpeg" if src == "port/hle/movie.c"
+            rule = ("cc" if src.startswith((f"{GEN}/", f"{JP['gen']}/")) else "cc_ffmpeg" if src == "port/hle/movie.c"
                     else "cc_freetype" if src == "port/hle/textfont.c" else "cc_fast")
             n.build(o, rule, src,
                     order_only=rc_files + ["build/shaders/shaders.h"])
@@ -194,6 +211,7 @@ def windows(args):
         n.rule("copy", "cp $in $out", description="copy $out")
         objs = []
         srcs = sorted(glob.glob(f"{GEN}/recomp/rc_*.c")) + [f"{GEN}/recomp/functab.c"]
+        srcs += sorted(glob.glob(f"{JP['gen']}/recomp/rc_*.c")) + [f"{JP['gen']}/recomp/functab.c"]
         srcs += sorted(glob.glob("port/**/*.c", recursive=True)) + sorted(glob.glob(f"{GEN}/vu/*.c"))
         for src in srcs:
             o = "build-win/obj/" + src.replace("/", "_")[:-2] + ".o"
@@ -202,7 +220,7 @@ def windows(args):
                 extra = "-DSSTHEH_FFMPEG"
             if src == "port/hle/textfont.c" and has_ft:
                 extra = "-DSSTHEH_FREETYPE"
-            if src.startswith(f"{GEN}/recomp/"):
+            if src.startswith((f"{GEN}/recomp/", f"{JP['gen']}/recomp/")):
                 n.build(o, "cc", src)
             else:
                 n.build(o, "cc_fast", src, variables={"extra": extra})
