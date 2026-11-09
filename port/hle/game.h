@@ -5,8 +5,10 @@
  * (the functions replaced or hooked), this is the list to go through for another build of the game.
  *
  * The Japanese column was found from the European one (tools/version_map.py): its functions matched
- * by their instructions, its variables by the addresses the matching code builds. 0 where it wasn't
- * found: the feature using it does nothing there.
+ * by their instructions, its variables by the addresses the matching code builds; the call sites in
+ * changed functions by their instruction sequences, and the computer controller's fields by the
+ * offsets its methods use at the same instructions. 0 where a value isn't found: the feature using
+ * it does nothing there.
  *
  * Naming: FN_ a function (called with rt_call), RA_ a return address (a hook looks at RW(31) to act
  * only for one caller), D_ a variable or table in the game's memory, VT_ a class's method table, and
@@ -38,13 +40,13 @@ typedef enum { GAME_EU, GAME_JP, GAME_VERSIONS } GameVersion;
     /* ---- return addresses (the call sites a hook acts for) */ \
     X(RA_BB_EVENTS_LO,      0x001B9F00u, 0x001BB200u) /* the Big Bang events' code, from here ... */ \
     X(RA_BB_EVENTS_HI,      0x001C0400u, 0x001C1AD0u) /* ... to here */ \
-    X(RA_BB_COUNTER,        0x001BC2C4u, 0)           /* the Big Bang Counter's timing press (the defender's query) */ \
+    X(RA_BB_COUNTER,        0x001BC2C4u, 0x001BD65Cu) /* the Big Bang Counter's timing press (the defender's query) */ \
     X(RA_MODE_MENU_TEXTS,   0x0017E710u, 0x0017F650u) /* the character select's mode menu: its texts made */ \
     X(RA_MODE_MENU_CURSOR,  0x0017E720u, 0x0017F660u) /* ... its first cursor set */ \
     X(RA_MODE_MENU_CHOSEN,  0x0017E350u, 0x0017F290u) /* ... its owner told the item chosen */ \
     X(RA_CSEL_MALLOC,       0x0017B1D0u, 0x0017C0C0u) /* character select: the elements' block allocated */ \
     X(RA_CSEL_NEW_ARRAY,    0x0017B1F8u, 0x0017C0E8u) /* ... and constructed (new[]) */ \
-    X(RA_CSEL_CLOSING,      0x00177318u, 0)           /* ... the screen closing (top border taken out of the draw lists) */ \
+    X(RA_CSEL_CLOSING,      0x00177318u, 0x00178178u) /* ... the screen closing (top border taken out of the draw lists) */ \
     /* ---- variables and tables */ \
     X(D_APP,                0x005000A0u, 0x00506F20u) /* -> the application object (+0x20: wait one more vertical blank) */ \
     X(D_FRAME,              0x00500204u, 0x00507084u) /* -> the frame object (+0x178: Timer 0 when the frame started) */ \
@@ -58,7 +60,10 @@ typedef enum { GAME_EU, GAME_JP, GAME_VERSIONS } GameVersion;
     X(D_VU1_MICROCODE,      0x003C6F80u, 0x003CD700u) /* the VU1 programs: DMA packets of MPGs (port/gs/vu_jit.c) */ \
     /* ---- method tables */ \
     X(VT_PLAYER_CTL,        0x004DD500u, 0x004E3F30u) /* a player's controller (reads a pad) */ \
-    X(VT_COM_CTL,           0x004DE0D0u, 0x004E4B00u) /* the computer's controller */
+    X(VT_COM_CTL,           0x004DE0D0u, 0x004E4B00u) /* the computer's controller */ \
+    /* ---- offsets that differ between the releases */ \
+    X(COM_DECISION,         0x158u,      0x160u)      /* computer controller: its decision (u16, 0 = nothing), */ \
+    X(COM_DECISION_ARGS,    0x164u,      0x16Cu)      /* ... with three bytes (the Japanese controller is 8 bytes longer) */
 
 enum {
 #define GAME_INDEX(name, eu, jp) GA_##name,
@@ -102,6 +107,8 @@ extern GameVersion game_version;
 #define D_VU1_MICROCODE     game_addr[GA_D_VU1_MICROCODE]
 #define VT_PLAYER_CTL       game_addr[GA_VT_PLAYER_CTL]
 #define VT_COM_CTL          game_addr[GA_VT_COM_CTL]
+#define COM_DECISION        game_addr[GA_COM_DECISION]
+#define COM_DECISION_ARGS   game_addr[GA_COM_DECISION_ARGS]
 
 #define D_UNLOCKS_SIZE      0xD4u        /* the unlock table's size */
 
@@ -111,8 +118,6 @@ extern GameVersion game_version;
 #define LIFE_FINISHING      0x5Cu           /* life block: a byte, set by a finishing blow (no revival) */
 #define CTL_VTABLE          8u              /* controller: its method table */
 #define CTL_PORT            0x18u           /* controller: its pad port (s16; < 0 or > 1: none) */
-#define COM_DECISION        0x158u          /* computer controller: its decision (u16, 0 = nothing), */
-#define COM_DECISION_ARGS   0x164u          /* ... with three bytes */
 #define PAD_PORT_STRIDE     0xE4u           /* pad manager: one player's pad after the other */
 #define PAD_PRESSED_WORD    0x44u           /* ... the buttons pressed this frame (u16) */
 
