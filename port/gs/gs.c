@@ -772,6 +772,7 @@ u32 *textfont_replace(const u8 *texels, u32 tw, u32 th, const u32 *pal, u32 *w_o
 
 /* The texture at tbp as RGBA (tw x th), as texel() reads it: the palette expanded once, the
  * buffer's row worked out once per line. */
+static int decode_indices;                  /* tex_log: a paletted texture's indices instead of its colours */
 static void tex_decode(u32 *px, u32 tbp, u32 tbw, u32 psm, u32 tw, u32 th, u32 cbp, u32 cpsm, u32 csa) {
     u32 bits = psm_bits(psm), pal[256];
     if (bits == 8) palette8(pal, cbp, cpsm);
@@ -780,6 +781,8 @@ static void tex_decode(u32 *px, u32 tbp, u32 tbw, u32 psm, u32 tw, u32 th, u32 c
             u32 c = i + (csa & 15) * 16;
             pal[i] = expand(vram_rw(cbp, 1, cpsm, c & 7, (c >> 3) & 31, 0, 0), cpsm);
         }
+    if (decode_indices)
+        for (u32 i = 0; i < 256; i++) pal[i] = i;
     u32 bw = tbw ? tbw : 1;
     for (u32 y = 0; y < th; y++) {
         u32 *out = px + y * tw;
@@ -833,6 +836,38 @@ static void tex_decode(u32 *px, u32 tbp, u32 tbw, u32 psm, u32 tw, u32 th, u32 c
     }
 }
 
+/* SSTHEH_TEX_LOG=file: one CSV line per texture decoded anew (the texture pack study): its name, format,
+ * size, for a paletted one the hash of its indices alone and of its palette alone (palette variants of
+ * one picture share the first), and whether it is flat or a text the font file redraws. */
+static void tex_log(u64 name, const u32 *px, u32 tbp, u32 tbw, u32 psm, u32 tw, u32 th, u32 cbp, u32 cpsm, u32 csa,
+                    int plain, int text) {
+    static FILE *f;
+    static int tried;
+    if (!tried) {
+        tried = 1;
+        const char *e = getenv("SSTHEH_TEX_LOG");
+        if (e && *e && (f = fopen(e, "w"))) fputs("name,psm,w,h,indices,palette,plain,text\n", f);
+    }
+    if (!f) return;
+    u64 ih = name, ph = 0;
+    u32 bits = psm_bits(psm);
+    if (bits <= 8) {
+        u32 *ix = malloc((size_t)tw * th * 4);
+        decode_indices = 1;
+        tex_decode(ix, tbp, tbw, psm, tw, th, cbp, cpsm, csa);
+        decode_indices = 0;
+        ih = texpack_name(ix, tw, th);
+        /* the palette: the colours of the indices used, in index order */
+        u32 pal[256] = {0}, used[256] = {0};
+        for (u32 i = 0; i < tw * th; i++) { used[ix[i] & 0xFF] = 1; pal[ix[i] & 0xFF] = px[i]; }
+        for (u32 i = 0; i < 256; i++) if (used[i]) ph = (ph ^ pal[i] ^ (u64)i << 32) * 0x100000001B3ull;
+        free(ix);
+    }
+    fprintf(f, "%016llx,%02x,%u,%u,%016llx,%016llx,%d,%d\n", (unsigned long long)name, psm, tw, th,
+            (unsigned long long)ih, (unsigned long long)ph, plain, text);
+    fflush(f);
+}
+
 /* A texture not seen with this content (ckey): decoded from the GS memory into a new entry, or
    replaced (a texture pack's PNG, or a text drawn with the font file), and queued for upload.
    Returns the entry, 0 when there is no room. */
@@ -846,12 +881,14 @@ static u32 texture_new(const u64 ckey[3], u32 tbp, u32 tbw, u32 psm, u32 tw, u32
     u64 name = texpack_name(px, tw, th);
     texpack_dump(name, px, tw, th);
     u32 uw = tw, uh = th, *rp = texpack_find(name, &uw, &uh), rect[4] = {0, 0, 0, 0}, fill = 0;
+    int font = 0;
     if (!rp && psm == 0x13 && textfont_active()) {      /* a text the game wrote: drawn with the font file */
         u8 *ix = malloc((size_t)tw * th);
         u32 pal[256];
         texels8(ix, tbp, tbw, tw, th);
         palette8(pal, cbp, cpsm);
         rp = textfont_replace(ix, tw, th, pal, &uw, &uh, rect, &fill);
+        font = rp != NULL;
         free(ix);
     }
     tex_ents[idx].plain = 1;                 /* every texel within a few levels of the first */
@@ -860,6 +897,7 @@ static u32 texture_new(const u64 ckey[3], u32 tbp, u32 tbw, u32 psm, u32 tw, u32
             int d = (int)((px[i] >> sh) & 0xFF) - (int)((px[0] >> sh) & 0xFF);
             if (d > 8 || d < -8) { tex_ents[idx].plain = 0; break; }
         }
+    tex_log(name, px, tbp, tbw, psm, tw, th, cbp, cpsm, csa, tex_ents[idx].plain, font);
     if (rp) {
         free(px);
         px = rp;

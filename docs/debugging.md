@@ -69,6 +69,7 @@ SSTHEH_AUDIO=0 SSTHEH_FRAME_LOG=frames.csv ./build/sstheh -v
 | `SSTHEH_GPU_RED=1` | new render targets start red instead of black (shows what was never drawn) |
 | `SSTHEH_SHOT_FULL=1` | `--shot` saves the whole internal-resolution frame |
 | `SSTHEH_PRIMS=N` | from vertical blank N, prints the first GS primitives' packets |
+| `SSTHEH_TEX_LOG=file.csv` | one line per texture decoded anew: its name, format, size, the hash of its indices alone and of its palette alone, flat, a text redrawn with the font (the texture pack study) |
 | `SSTHEH_TEX_DUMP=1` | saves every texture the game uses as PNG (`~/.local/share/sstheh/textures/dump/`) |
 | `SSTHEH_FONT_DEBUG=1` | logs every glyph the game writes and every text drawn with the font (and how long it took) |
 | `SSTHEH_GSREC=file` | records the `gs` thread's work (`SSTHEH_GSREC_FROM`, default 9000; `SSTHEH_GSREC_FRAMES`, 150); `build/sstheh --gs-replay file` replays it without the game: time per frame and a hash of everything drawn |
