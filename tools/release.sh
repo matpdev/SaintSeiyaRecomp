@@ -81,6 +81,8 @@ PORTUGUES
    pasta disc\ (cerca de 4 GB livres sao necessarios).
 3. Aperte Instalar e depois Jogar. Da proxima vez, abra sstheh.exe ou o atalho.
 Precisa de Windows 10/11 de 64 bits e de uma placa de video com Vulkan.
+Se o botao Jogar ficar apagado e sstheh.exe sumir da pasta, o antivirus o removeu: em Seguranca do Windows >
+Historico de protecao, restaure e permita o arquivo (ou extraia o zip de novo numa pasta sua).
 Teclas: setas, Z/X/A/S = X/O/Quadrado/Triangulo, Q/W/E/R = L1/R1/L2/R2, Enter = Start, Backspace = Select,
 F1 tamanho da janela, F2 16:9/4:3, F3 desempenho, F4 vsync, F5 treino e opcoes. Controles sao reconhecidos.
 As configuracoes e o memory card ficam em %APPDATA%\sstheh.
@@ -91,6 +93,8 @@ ENGLISH
    copied into the disc\ folder (about 4 GB free are needed).
 3. Press Install, then Play. Next time, run sstheh.exe or the shortcut.
 Needs 64-bit Windows 10/11 and a graphics card with Vulkan.
+If Play stays greyed out and sstheh.exe is gone from the folder, an antivirus removed it: in Windows Security >
+Protection history, restore and allow it (or extract the zip again into a folder of your own).
 Keys: arrows, Z/X/A/S = Cross/Circle/Square/Triangle, Q/W/E/R = L1/R1/L2/R2, Enter = Start, Backspace = Select,
 F1 window size, F2 16:9/4:3, F3 performance, F4 vsync, F5 training and options. Gamepads are picked up.
 Settings and the memory card are kept in %APPDATA%\sstheh.

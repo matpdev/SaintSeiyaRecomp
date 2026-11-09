@@ -29,6 +29,7 @@
 #include <QStyle>
 #include <QStyleFactory>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QEventLoop>
@@ -682,15 +683,15 @@ public:
             drop->file(disc_dir() + "/game.iso");
             show_status(T("✓  Installed: press Play. To use another image, drop it above and install again.",
                           "✓  Instalado: aperte Jogar. Para usar outra imagem, solte-a acima e instale de novo."), true);
-            play->setEnabled(QFileInfo(game_exe()).exists());
         } else {
             step->setText(T("Choose your disc image to begin.", "Escolha a imagem do seu disco para começar."));
         }
-        if (!QFileInfo(game_exe()).exists())
-            step->setText(T("The game (%1) is not next to this setup: keep the release's files together.",
-                            "O jogo (%1) não está junto deste instalador: mantenha os arquivos do release juntos.")
-                              .arg(QFileInfo(game_exe()).fileName()));
-        setFixedHeight(sizeHint().height() + 24);       /* room for a two-line message */
+        check_game();
+        setFixedHeight(sizeHint().height() + 48);       /* room for a three-line message */
+        /* the game put back (an antivirus' quarantine restored, the files extracted again): Play comes back */
+        auto *watch = new QTimer(this);
+        connect(watch, &QTimer::timeout, this, [this] { if (install->isEnabled() || installed()) check_game(); });
+        watch->start(1500);
     }
 
     void choose(const QString &f) {
@@ -701,6 +702,7 @@ public:
         install->setEnabled(disc.ok);
         install->setText(installed() ? T("Install again", "Instalar de novo") : T("Install", "Instalar"));
         if (disc.ok && !installed()) step->setText(T("Ready to install.", "Pronto para instalar."));
+        if (!QFileInfo(game_exe()).exists()) check_game();     /* the missing game comes first */
     }
 
 private:
@@ -711,6 +713,29 @@ private:
     QPushButton *install, *play;
     Disc disc;
     QString iso;
+
+    /* Play is for an installed game next to this setup. Without the game's executable the reason is
+     * told: most often an antivirus took it away (a large executable without a signature). */
+    bool game_missing = false;
+    void check_game() {
+        bool there = QFileInfo(game_exe()).exists();
+        play->setEnabled(there && installed());
+        if (!there) {
+            game_missing = true;
+            show_status(T("✕  The game itself (%1) is missing from this folder, so it can't start. An antivirus may have "
+                          "removed it (Windows Security > Protection history: restore it and allow it), or the zip "
+                          "wasn't fully extracted: extract it all again into a folder of your own.",
+                          "✕  O próprio jogo (%1) não está nesta pasta, então ele não pode abrir. Um antivírus pode tê-lo "
+                          "removido (Segurança do Windows > Histórico de proteção: restaure e permita), ou o zip não "
+                          "foi extraído inteiro: extraia tudo de novo numa pasta sua.")
+                            .arg(QFileInfo(game_exe()).fileName()), false);
+        } else if (game_missing) {
+            game_missing = false;
+            show_status(installed() ? T("✓  Installed: press Play.", "✓  Instalado: aperte Jogar.")
+                                    : T("✓  The game is back: choose your disc image.", "✓  O jogo voltou: escolha a imagem do seu disco."),
+                        true);
+        }
+    }
 
     void show_status(const QString &text, bool good) {
         status->setText(text);
@@ -764,8 +789,9 @@ private:
         }
         delete sha1;
         for (QWidget *w : findChildren<QWidget *>()) w->setEnabled(true);
-        play->setEnabled(installed() && QFileInfo(game_exe()).exists());
         install->setEnabled(disc.ok);
+        if (err.isEmpty()) check_game();
+        else play->setEnabled(installed() && QFileInfo(game_exe()).exists());
         if (play->isEnabled()) play->setFocus();
     }
 };
