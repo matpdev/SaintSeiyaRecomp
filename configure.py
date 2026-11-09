@@ -194,6 +194,9 @@ def windows(args):
            + (f" -I{ff}/include" if ff else "") + (f" -I{ft}/include/freetype2" if has_ft else ""))
     cc = "x86_64-w64-mingw32-gcc"
     flags = f"-g -w -fno-strict-aliasing -ffp-contract=off -march={args.march} -D_FILE_OFFSET_BITS=64"   # off_t: 64 bits (the 4 GB image)
+    os.makedirs("build-win", exist_ok=True)
+    subprocess.run([sys.executable, "-I", "tools/win_version.py", "build-win/version.h",
+                    "Saint Seiya: The Hades - PC Port", "sstheh.exe"], check=True)
     with open("build-win.ninja", "w") as f:
         n = ninja_syntax.Writer(f, width=120)
         n.variable("ninja_required_version", "1.10")
@@ -209,6 +212,10 @@ def windows(args):
         n.rule("link", f"{cc} -mwindows -static-libgcc $in -o $out {libs} -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic -lm",
                description="link $out")
         n.rule("copy", "cp $in $out", description="copy $out")
+        # icon, manifest and version information (port/win): a Windows program as others are
+        n.rule("windres", "x86_64-w64-mingw32-windres -Iport/win -Ibuild-win -O coff $in -o $out", description="windres $in")
+        n.build("build-win/obj/version_res.o", "windres", "port/win/version.rc",
+                implicit=["port/win/sstheh.ico", "port/win/app.manifest", "build-win/version.h"])
         objs = []
         srcs = sorted(glob.glob(f"{GEN}/recomp/rc_*.c")) + [f"{GEN}/recomp/functab.c"]
         srcs += sorted(glob.glob(f"{JP['gen']}/recomp/rc_*.c")) + [f"{JP['gen']}/recomp/functab.c"]
@@ -225,7 +232,7 @@ def windows(args):
             else:
                 n.build(o, "cc_fast", src, variables={"extra": extra})
             objs.append(o)
-        n.build("build-win/sstheh.exe", "link", objs)
+        n.build("build-win/sstheh.exe", "link", objs + ["build-win/obj/version_res.o"])
         dlls = [f"{sdl}/bin/SDL3.dll"]
         if ff:
             dlls += [d for d in sorted(glob.glob(f"{ff}/bin/*.dll")) if not os.path.basename(d).startswith(("avdevice", "avfilter"))]

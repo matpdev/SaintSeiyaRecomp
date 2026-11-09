@@ -1,0 +1,37 @@
+/* The Windows resources of the game (sstheh.exe) and of its setup: icon, manifest, version
+ * information. Built with windres (configure.py --windows, tools/release.sh) with a version.h next to
+ * the object (tools/win_version.py): FILE_DESC, FILE_NAME, VER_A, VER_B, VER_C, VER_STR. */
+#include <winver.h>
+#include "version.h"
+
+1 ICON "sstheh.ico"
+1 24 "app.manifest"            /* RT_MANIFEST, CREATEPROCESS_MANIFEST_RESOURCE_ID */
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     VER_A, VER_B, VER_C, 0
+PRODUCTVERSION  VER_A, VER_B, VER_C, 0
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "SaintSeiyaDecomp (open source, https://github.com/matpdev/SaintSeiyaRecomp)"
+            VALUE "FileDescription",  FILE_DESC
+            VALUE "FileVersion",      VER_STR
+            VALUE "InternalName",     FILE_NAME
+            VALUE "LegalCopyright",   "MIT License. Contains no game data: it plays the user's own disc image."
+            VALUE "OriginalFilename", FILE_NAME
+            VALUE "ProductName",      "Saint Seiya: The Hades - PC Port"
+            VALUE "ProductVersion",   VER_STR
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

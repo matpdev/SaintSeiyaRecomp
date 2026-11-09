@@ -29,9 +29,11 @@ windows() {
     .venv/bin/ninja -f build-win.ninja >/dev/null
     ok "game built for Windows"
     mkdir -p build-win/setup
+    python3 -I tools/win_version.py build-win/setup/version.h "Saint Seiya: The Hades - PC Port setup" SaintSeiyaDecomp-setup.exe
+    x86_64-w64-mingw32-windres -Iport/win -Ibuild-win/setup -O coff port/win/version.rc -o build-win/setup/version_res.o
     x86_64-w64-mingw32-g++ -std=c++17 -O2 -DUNICODE -D_UNICODE -DQT_NO_DEBUG -DSETUP_VERSION="\"$VERSION\"" \
         -I$QT/include -I$QT/include/QtCore -I$QT/include/QtGui -I$QT/include/QtWidgets -I$QT/include/QtNetwork \
-        -I$QT/mkspecs/win32-clang-g++ tools/setup/main.cpp -o build-win/setup/SaintSeiyaDecomp-setup.exe \
+        -I$QT/mkspecs/win32-clang-g++ tools/setup/main.cpp build-win/setup/version_res.o -o build-win/setup/SaintSeiyaDecomp-setup.exe \
         -mwindows -static-libstdc++ -static-libgcc -L$QT/lib -lQt6EntryPoint -lQt6Widgets -lQt6Gui -lQt6Network \
         -lQt6Core -lshell32
     ok "setup built for Windows"
@@ -39,9 +41,14 @@ windows() {
     D=dist/SaintSeiyaDecomp
     rm -rf dist/SaintSeiyaDecomp dist/SaintSeiyaDecomp-windows-x64.zip
     mkdir -p "$D/platforms" "$D/styles" "$D/tls" "$D/licenses"
-    x86_64-w64-mingw32-strip -o "$D/sstheh.exe" build-win/sstheh.exe
+    # stripped, without the 4-byte .eh_frame (unused on x64 Windows) and with .qtversion renamed: no section
+    # name longer than 8 characters, so no COFF string table left after the image (an "overlay" to
+    # antivirus heuristics); then the header's checksum (tools/pe_tidy.py)
+    x86_64-w64-mingw32-strip --remove-section=.eh_frame -o "$D/sstheh.exe" build-win/sstheh.exe
     cp build-win/*.dll "$D/"
-    x86_64-w64-mingw32-strip -o "$D/SaintSeiyaDecomp-setup.exe" build-win/setup/SaintSeiyaDecomp-setup.exe
+    x86_64-w64-mingw32-strip --remove-section=.eh_frame -o "$D/SaintSeiyaDecomp-setup.exe" build-win/setup/SaintSeiyaDecomp-setup.exe
+    x86_64-w64-mingw32-objcopy --rename-section .qtversion=.qtver "$D/SaintSeiyaDecomp-setup.exe"
+    python3 -I tools/pe_tidy.py "$D/sstheh.exe" "$D/SaintSeiyaDecomp-setup.exe"
     for m in Core Gui Widgets Network; do cp "$QT/bin/Qt6$m.dll" "$D/"; done
     cp "$QT/plugins/platforms/qwindows.dll" "$D/platforms/"
     cp "$QT/plugins/styles/qmodernwindowsstyle.dll" "$D/styles/"
