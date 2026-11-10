@@ -1,4 +1,5 @@
-/* Linux / Windows differences: see platform.h */
+/* Linux / Windows / macOS differences: see platform.h */
+#define _GNU_SOURCE   /* pthread_setname_np */
 #include "platform.h"
 
 #include <stdio.h>
@@ -13,6 +14,11 @@
 #else
 #include <unistd.h>
 #endif
+#ifdef __APPLE__
+#include <errno.h>
+#include <limits.h>
+#include <mach-o/dyld.h>
+#endif
 
 int platform_exe_dir(char *out, size_t n) {
 #ifdef _WIN32
@@ -20,6 +26,10 @@ int platform_exe_dir(char *out, size_t n) {
     DWORD k = GetModuleFileNameA(NULL, exe, sizeof exe);
     if (!k || k >= sizeof exe) return -1;
     for (char *c = exe; *c; c++) if (*c == '\\') *c = '/';
+#elif defined(__APPLE__)
+    char path[PATH_MAX], exe[PATH_MAX];
+    uint32_t k = sizeof path;
+    if (_NSGetExecutablePath(path, &k) != 0 || !realpath(path, exe)) return -1;
 #else
     char exe[1024];
     ssize_t k = readlink("/proc/self/exe", exe, sizeof exe - 1);
@@ -42,11 +52,25 @@ void platform_data_dir(char *out, size_t n) {
 #else
     const char *d = getenv("XDG_DATA_HOME"), *h = getenv("HOME");
     if (d && *d) snprintf(base, sizeof base, "%s", d);
+#ifdef __APPLE__
+    else snprintf(base, sizeof base, "%s/Library/Application Support", h ? h : "/tmp");
+#else
     else snprintf(base, sizeof base, "%s/.local/share", h ? h : "/tmp");
+#endif
 #endif
     mkdir(base, 0755);
     snprintf(out, n, "%s/sstheh", base);
     mkdir(out, 0755);
+}
+
+void platform_cache_base(char *out, size_t n) {
+    const char *d = getenv("XDG_CACHE_HOME"), *h = getenv("HOME");
+    if (d && *d) snprintf(out, n, "%s", d);
+#ifdef __APPLE__
+    else snprintf(out, n, "%s/Library/Caches", h ? h : "/tmp");
+#else
+    else snprintf(out, n, "%s/.cache", h ? h : "/tmp");
+#endif
 }
 
 void *platform_aligned_alloc(size_t align, size_t size) {
@@ -112,8 +136,28 @@ void platform_sleep_until(const struct timespec *when) {
             if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) WaitForSingleObject(timer, INFINITE);
         } else SwitchToThread();
     }
+#elif defined(__APPLE__)
+    /* no absolute clock_nanosleep: sleep for what is left (nanosleep returns early on a signal, so again) */
+    for (;;) {
+        struct timespec now, left;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        long long ns = (long long)(when->tv_sec - now.tv_sec) * 1000000000LL + (when->tv_nsec - now.tv_nsec);
+        if (ns <= 0) return;
+        left.tv_sec = (time_t)(ns / 1000000000LL);
+        left.tv_nsec = (long)(ns % 1000000000LL);
+        if (nanosleep(&left, NULL) == 0) return;
+        if (errno != EINTR) return;
+    }
 #else
     clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, when, NULL);
+#endif
+}
+
+void platform_thread_name(pthread_t t, const char *name) {
+#ifdef __APPLE__
+    if (pthread_equal(t, pthread_self())) pthread_setname_np(name);
+#else
+    pthread_setname_np(t, name);
 #endif
 }
 

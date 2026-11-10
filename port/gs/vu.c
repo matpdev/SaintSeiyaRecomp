@@ -12,7 +12,7 @@
  */
 #include <stdio.h>
 #include <string.h>
-#include <immintrin.h>
+#include "simd.h"
 
 #include "r5900.h"
 #include "runtime.h"

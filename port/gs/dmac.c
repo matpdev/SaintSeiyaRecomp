@@ -25,6 +25,7 @@
 
 #include "r5900.h"
 #include "runtime.h"
+#include "platform.h"
 #include "kernel.h"
 #include "gs.h"
 #include "gpu.h"
@@ -230,7 +231,7 @@ static void gs_thread_start(void) {
     if (async) {
         pthread_t t;
         pthread_create(&t, NULL, gs_thread, NULL);
-        pthread_setname_np(t, "gs");
+        platform_thread_name(t, "gs");
         pthread_detach(t);
     }
 }

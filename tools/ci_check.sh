@@ -2,6 +2,7 @@
 # What can be checked without the game (the CI runs it; it works the same on your machine):
 #   tools/ci_check.sh linux     the port's own code compiled with gcc, warnings as errors; the setup (Qt) built
 #   tools/ci_check.sh windows   the port's own code compiled with MinGW-w64 (tools/win_deps.sh first)
+#   tools/ci_check.sh macos     the port's own code compiled with clang for Apple Silicon (shaders also as MSL)
 #   tools/ci_check.sh python    the Python tools byte-compiled
 # The game's translated code (generated/) is left to the release jobs, which build everything
 # (tools/release.sh): this is the fast check, with the port's own warnings as errors.
@@ -20,6 +21,12 @@ shaders() {     # port/gs/shaders -> $OUT/shaders/shaders.h, as configure.py doe
         glslc -O "$sh" -o "$OUT/shaders/$(basename "$sh").spv" || fail "glslc $sh"
         spvs="$spvs $OUT/shaders/$(basename "$sh").spv"
     done
+    if [ "${1:-}" = msl ]; then     # Metal: the same shaders as MSL
+        for spv in $spvs; do
+            spirv-cross --msl --msl-version 20100 "$spv" --output "${spv%.spv}.msl" || fail "spirv-cross $spv"
+            spvs="$spvs ${spv%.spv}.msl"
+        done
+    fi
     python3 -I tools/spv2h.py $OUT/shaders/shaders.h $spvs
 }
 
@@ -59,9 +66,16 @@ windows)
     compile_all x86_64-w64-mingw32-gcc "-O2 -g -fno-strict-aliasing -ffp-contract=off -march=x86-64-v2 -D_FILE_OFFSET_BITS=64 $WARN $INC -I$sdl/include" \
         $OUT/windows "-DSSTHEH_FFMPEG -I$ff/include" "$ftflags"
     ;;
+macos)
+    shaders msl
+    ff=$(pkg-config --cflags libavformat libavcodec libavutil libswscale libswresample)
+    ft=$(pkg-config --cflags freetype2)
+    compile_all cc "-O2 -g -fno-strict-aliasing -ffp-contract=off -mcpu=apple-m1 $WARN $INC $(pkg-config --cflags sdl3)" \
+        $OUT/macos "-DSSTHEH_FFMPEG $ff" "-DSSTHEH_FREETYPE $ft"
+    ;;
 python)
     python3 -m py_compile configure.py tools/*.py tools/recomp/*.py || fail "python"
     ok "Python tools compile"
     ;;
-*) echo "usage: tools/ci_check.sh linux|windows|python"; exit 1 ;;
+*) echo "usage: tools/ci_check.sh linux|windows|macos|python"; exit 1 ;;
 esac

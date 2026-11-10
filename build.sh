@@ -25,23 +25,32 @@ for a in "$@"; do
 done
 
 # ---------------------------------------------------------------------------------- dependencies
+MACOS=""
+[ "$(uname -s)" = Darwin ] && MACOS=1       # macOS on Apple Silicon: clang, the libraries from Homebrew
+CC=gcc
+[ -n "$MACOS" ] && CC=cc
 missing=""
-command -v gcc >/dev/null || missing="$missing gcc"
+command -v $CC >/dev/null || missing="$missing $CC"
 command -v python3 >/dev/null || missing="$missing python3"
 command -v glslc >/dev/null || missing="$missing glslc"
+[ -z "$MACOS" ] || command -v spirv-cross >/dev/null || missing="$missing spirv-cross"
+[ -z "$MACOS" ] || command -v pkg-config >/dev/null || missing="$missing pkg-config"
 if ! { pkg-config --exists sdl3 2>/dev/null || [ -e /usr/include/SDL3/SDL.h ] || [ -e /usr/local/include/SDL3/SDL.h ]; }; then
     missing="$missing SDL3"
 fi
 python3 -c 'import venv, ensurepip' 2>/dev/null || missing="$missing python3-venv"
 if [ -n "$missing" ]; then
     printf '\033[31m✗ missing:%s\033[0m\n' "$missing" >&2
-    if command -v pacman >/dev/null; then echo "  sudo pacman -S gcc python shaderc sdl3 vulkan-icd-loader"
+    if [ -n "$MACOS" ]; then
+        command -v $CC >/dev/null || echo "  xcode-select --install"
+        echo "  brew install python shaderc spirv-cross pkg-config sdl3 ffmpeg freetype"
+    elif command -v pacman >/dev/null; then echo "  sudo pacman -S gcc python shaderc sdl3 vulkan-icd-loader"
     elif command -v apt >/dev/null; then echo "  sudo apt install gcc python3-venv glslc libsdl3-dev libvulkan1"
     elif command -v dnf >/dev/null; then echo "  sudo dnf install gcc python3 glslc SDL3-devel vulkan-loader"
     fi
     exit 1
 fi
-ok "dependencies: gcc, python3, glslc, SDL3"
+ok "dependencies: $CC, python3, glslc, SDL3"
 pkg-config --exists freetype2 2>/dev/null ||
     info "optional: FreeType (freetype2 / libfreetype-dev) not found, the texts keep the disc's font"
 pkg-config --exists libavformat libavcodec libswscale libswresample 2>/dev/null ||
@@ -58,7 +67,10 @@ if [ -z "$ISO" ] && [ -e disc/game.iso ] && { [ -f disc/SLES_541.62 ] || [ -f di
     ok "disc already prepared (disc/game.iso)"
 else
     if [ -z "$ISO" ]; then
-        if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v zenity >/dev/null; then
+        if [ -n "$MACOS" ] && [ -t 0 ] && command -v osascript >/dev/null; then
+            ISO=$(osascript -e 'POSIX path of (choose file with prompt "Pick the Saint Seiya: The Hades ISO (Europe or Japan)" of type {"iso", "public.iso-image"})' \
+                  2>/dev/null) || fail "no ISO picked"
+        elif [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v zenity >/dev/null; then
             ISO=$(zenity --file-selection --title="Pick the Saint Seiya: The Hades ISO (Europe or Japan)" \
                   --file-filter="Disc images | *.iso *.ISO" 2>/dev/null) || fail "no ISO picked"
         elif [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v kdialog >/dev/null; then
@@ -89,5 +101,6 @@ ok "Python environment"
 # ---------------------------------------------------------------------------------- build
 info "building (the first time takes a few minutes)"
 .venv/bin/python configure.py >/dev/null
-PATH="$PWD/.venv/bin:$PATH" ninja -j"$(nproc)" port
+if [ -n "$MACOS" ]; then jobs=$(sysctl -n hw.ncpu); else jobs=$(nproc); fi
+PATH="$PWD/.venv/bin:$PATH" ninja -j"$jobs" port
 ok "done: build/sstheh. To play: ./play.sh"

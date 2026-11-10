@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #include "runtime.h"
+#include "platform.h"
 #include "lle.h"
 
 int cdvd_find(const char *path, u32 *lsn, u32 *size);
@@ -279,7 +280,7 @@ static void n_StartThread(IopCpu *cpu) {
         pthread_create(&h, &a, thread_main, (void *)(intptr_t)i);
         char name[16];
         snprintf(name, sizeof name, "iop-%d", i);
-        pthread_setname_np(h, name);
+        platform_thread_name(h, name);
         pthread_attr_destroy(&a);
         th[i].host = 1;
     }
@@ -831,24 +832,27 @@ int iop_lle_load(const char *path) {
 /* The clock: makes the SPU2's samples (48 kHz), and moves the IOP clock on with them. */
 #define RING 8192
 static float ring[RING * 2];
-static volatile u64 ring_w, ring_r;          /* frames written / read */
+static u64 ring_w, ring_r;                   /* frames written / read: each published with a release store, so that
+                                              * the other side sees the samples before the count (arm64 needs it) */
 static int audio_pulls;                     /* the sound device takes the samples (else: by time) */
 
 void iop_lle_audio(float *out, int frames) {  /* the sound device's callback: add the SPU2's output */
     static u64 short_frames, calls;
     calls++;
     if (!audio_pulls) { audio_pulls = 1; return; }      /* the clock starts filling the ring */
-    if (ring_w - ring_r < (u64)frames) short_frames += (u64)frames - (ring_w - ring_r);
+    u64 w = __atomic_load_n(&ring_w, __ATOMIC_ACQUIRE), r = ring_r;
+    if (w - r < (u64)frames) short_frames += (u64)frames - (w - r);
     if (rt_verbose > 1 && calls % 2000 == 0 && short_frames) {
         rt_log("iop-lle", "sound: %llu frames missing so far", (unsigned long long)short_frames);
     }
     for (int f = 0; f < frames; f++) {
-        if (ring_r >= ring_w) break;
-        u32 k = (u32)(ring_r % RING) * 2;
+        if (r >= w) break;
+        u32 k = (u32)(r % RING) * 2;
         out[f * 2] += ring[k];
         out[f * 2 + 1] += ring[k + 1];
-        ring_r++;
+        r++;
     }
+    __atomic_store_n(&ring_r, r, __ATOMIC_RELEASE);
 }
 
 static u64 now_ns(void) {
@@ -866,7 +870,7 @@ static void *clock_main(void *unused) {
     float buf[CHUNK * 2];
     for (;;) {
         int go;
-        if (audio_pulls) go = ring_w - ring_r < AHEAD;
+        if (audio_pulls) go = ring_w - __atomic_load_n(&ring_r, __ATOMIC_ACQUIRE) < AHEAD;
         else go = made < (now_ns() - t0) * 48000 / 1000000000ull;
         if (!go) { usleep(1000); continue; }
         made += CHUNK;
@@ -895,13 +899,15 @@ static void *clock_main(void *unused) {
             }
         }
         if (audio_pulls) {
+            u64 w = ring_w;
             for (int f = 0; f < CHUNK; f++) {
-                u32 k = (u32)(ring_w % RING) * 2;
+                u32 k = (u32)(w % RING) * 2;
                 ring[k] = buf[f * 2];
                 ring[k + 1] = buf[f * 2 + 1];
-                ring_w++;
+                w++;
             }
-        } else ring_r = ring_w;
+            __atomic_store_n(&ring_w, w, __ATOMIC_RELEASE);
+        } else __atomic_store_n(&ring_r, ring_w, __ATOMIC_RELEASE);
     }
     return NULL;
 }
@@ -914,6 +920,6 @@ void iop_lle_clock_start(void) {
     cri_audio_start();
     pthread_t h;
     pthread_create(&h, NULL, clock_main, NULL);
-    pthread_setname_np(h, "iop-clock");
+    platform_thread_name(h, "iop-clock");
     pthread_detach(h);
 }

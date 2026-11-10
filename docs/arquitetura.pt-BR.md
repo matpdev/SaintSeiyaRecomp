@@ -105,7 +105,7 @@ um executável modificado).
 | Pasta | Conteúdo |
 |---|---|
 | `port/main.c` | Linha de comando, inicialização |
-| `port/runtime/` | Auxiliares da CPU do jogo (`r5900.h`: registradores, acesso à memória, regras da FPU), mapa de memória e carga do ELF, logs, relatórios de crash, profiler, camada de plataforma (Linux / Windows) |
+| `port/runtime/` | Auxiliares da CPU do jogo (`r5900.h`: registradores, acesso à memória, regras da FPU), mapa de memória e carga do ELF, logs, relatórios de crash, profiler, camada de plataforma (Linux / Windows / macOS), `simd.h` (SSE no x86-64, sse2neon no arm64) |
 | `port/kernel/` | O kernel do EE: threads, semáforos, interrupções, alarmes, syscalls |
 | `port/iop/` | Serviços do IOP (SIF, RPC), controles, áudio ADX da CRI; `lle/`: os módulos do IOP que rodam como são (interpretador MIPS I, SPU2) |
 | `port/gs/` | DMAC, VIF, VU0/VU1, GS, renderizador Vulkan, janela, pacotes de textura, gravações |

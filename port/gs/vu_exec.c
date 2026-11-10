@@ -19,7 +19,7 @@
  * Flags: MAC (component i = x..w: zero bit 3-i, sign 7-i), status (Z S U O I D, sticky copies
  * 6-11), clip (6 bits per CLIP, the last four kept).
  */
-#include <immintrin.h>
+#include "simd.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -169,8 +169,7 @@ static void run(Vu *v) {
     programs_run++;
     v->vf[0].f[0] = v->vf[0].f[1] = v->vf[0].f[2] = 0.0f;
     v->vf[0].f[3] = 1.0f;
-    u32 csr = _mm_getcsr();
-    _mm_setcsr(csr | 0x8040);                        /* FTZ | DAZ: denormals are zero, as on the VU */
+    simd_fpstate fps = simd_flush_denormals();       /* denormals are zero, as on the VU */
     Dec *decv = decs[v->id];
     for (int guard = 0; guard < 1 << 22; guard++) {
         u32 pc = v->pc & v->code_mask;
@@ -205,7 +204,7 @@ static void run(Vu *v) {
     }
     if (v->q_wait) { v->q = v->q_next; v->q_wait = 0; }
     if (v->p_wait) { v->p = v->p_next; v->p_wait = 0; }
-    _mm_setcsr(csr);
+    simd_restore(fps);
 }
 
 /* SSTHEH_VUREC=file (SSTHEH_VUREC_FROM=vertical blank, 8000 if not given): for 20 vertical blanks,
@@ -258,10 +257,9 @@ void vu_start(int id, int addr, u32 itop) {
     v->vf[0].f[0] = v->vf[0].f[1] = v->vf[0].f[2] = 0.0f;
     v->vf[0].f[3] = 1.0f;
     int recording = id == 1 && record_before(v);
-    u32 csr = _mm_getcsr();
-    _mm_setcsr(csr | 0x8040);                        /* FTZ | DAZ, as in run() */
+    simd_fpstate fps = simd_flush_denormals();       /* as in run() */
     int done = vu_jit_run(v);
-    _mm_setcsr(csr);
+    simd_restore(fps);
     if (done) {                                      /* as at the end of run() */
         if (v->q_wait) { v->q = v->q_next; v->q_wait = 0; }
         if (v->p_wait) { v->p = v->p_next; v->p_wait = 0; }

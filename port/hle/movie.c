@@ -21,6 +21,7 @@
 #include <time.h>
 
 #include "hle.h"
+#include "platform.h"
 
 #define NAMES D_MOVIE_NAMES     /* the scene's video names, by its index (+0x40): "DATA/GX_JP.SFD", 0 */
 #define PAD_START 0x0008
@@ -231,7 +232,7 @@ static int movie_start(const char *name) {
     ring_n = 0;
     running = 1;
     if (pthread_create(&thread, NULL, play, NULL)) { running = 0; return 0; }
-    pthread_setname_np(thread, "movie");
+    platform_thread_name(thread, "movie");
     return 1;
 }
 

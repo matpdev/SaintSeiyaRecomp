@@ -4,8 +4,9 @@
  * A program is what runs from an entry address: the pairs reachable from it (following branches,
  * up to the pair after an E bit), identified by the entry and a hash of those pairs. The first time
  * one is seen it is written as C (one block per pair, calling the interpreter's inline upper() and
- * lower() with constants, so the compiler specialises them), compiled with gcc in the background
- * into a shared object kept in ~/.cache/sstheh/vu/<version>, and loaded; until then the interpreter
+ * lower() with constants, so the compiler specialises them), compiled with gcc (clang on macOS) in the
+ * background into a shared object kept in ~/.cache/sstheh/vu/<version> (~/Library/Caches/sstheh/vu on
+ * macOS), and loaded; until then the interpreter
  * runs it. What other versions (of the generator, the headers, the compiler flags) left there is
  * removed at start.
  * Compiled programs from earlier sessions are loaded as soon as their program is seen. The game's
@@ -40,6 +41,7 @@
 
 #include "r5900.h"
 #include "runtime.h"
+#include "platform.h"
 #include "vu.h"
 #include "vu_internal.h"
 #include "perf.h"
@@ -47,7 +49,16 @@
 
 #define NPAIRS (0x4000 / 8)
 #define GEN_VERSION 12          /* of the C written: part of the keys */
-#define CC_FLAGS "-O2 -march=native -fno-strict-aliasing -ffp-contract=off -w -shared -fPIC"   /* also */
+#define CC_FLAGS "-O2 -fno-strict-aliasing -ffp-contract=off -w"   /* also part of the keys (the same on every system) */
+/* the compiler and what makes a shared object for this machine (not part of the keys: a build's programs
+ * work on any system the C compiles on) */
+#if defined(__APPLE__)
+#define CC_HOST "cc -mcpu=native -dynamiclib -undefined dynamic_lookup"
+#elif defined(__aarch64__)
+#define CC_HOST "gcc -mcpu=native -shared -fPIC"
+#else
+#define CC_HOST "gcc -march=native -shared -fPIC"
+#endif
 
 typedef int (*ProgFn)(Vu *v);
 
@@ -945,7 +956,7 @@ static void *compiler(void *arg) {
         free(p->source);
         p->source = NULL;
         snprintf(cmd, sizeof cmd,
-                 "%sgcc " CC_FLAGS " -I'%s/port/runtime' -I'%s/port/gs' -o '%s' '%s' -lm",
+                 "%s" CC_HOST " " CC_FLAGS " -I'%s/port/runtime' -I'%s/port/gs' -o '%s' '%s' -lm",
                  ahead ? "nice -n 10 " : "", src_dir, src_dir, tmp_path, c_path);
         if (!f || system(cmd) != 0 || rename(tmp_path, so_path) != 0) {
             rt_log("vujit", "compiling %s failed", c_path);
@@ -1009,13 +1020,8 @@ static int setup(void) {
     const char *e = getenv("SSTHEH_VUJIT");
     if (e && !atoi(e)) return 0;
     char exe[PATH_MAX];
-    ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
-    if (n <= 0) return 0;
-    exe[n] = 0;
-    char *slash = strrchr(exe, '/');                    /* .../build/sstheh -> ... */
-    if (!slash) return 0;
-    *slash = 0;
-    slash = strrchr(exe, '/');
+    if (platform_exe_dir(exe, sizeof exe) != 0) return 0;  /* .../build/sstheh -> ... */
+    char *slash = strrchr(exe, '/');
     if (!slash) return 0;
     *slash = 0;
     snprintf(src_dir, sizeof src_dir, "%s", exe);
@@ -1043,10 +1049,8 @@ static int setup(void) {
     if (built_in && header_hash != vu_builtin_header_hash)
         rt_log("vujit", "the sources changed since the build: its %d programs are not used", vu_builtin_count);
     else if (built_in) rt_log("vujit", "%d VU1 programs built in", vu_builtin_count);
-    const char *home = getenv("XDG_CACHE_HOME");
     char base[PATH_MAX];
-    if (home && *home) snprintf(base, sizeof base, "%s", home);
-    else snprintf(base, sizeof base, "%s/.cache", getenv("HOME") ? getenv("HOME") : "/tmp");
+    platform_cache_base(base, sizeof base);
     char version[17], vu_dir[PATH_MAX];
     snprintf(version, sizeof version, "%016llx", (unsigned long long)((header_hash ^ GEN_VERSION) * 0x100000001B3ull));
     if (snprintf(vu_dir, sizeof vu_dir, "%s/sstheh/vu", base) >= (int)sizeof vu_dir ||
@@ -1068,7 +1072,7 @@ static int setup(void) {
     for (int k = 0; k < threads; k++) {
         pthread_t t;
         pthread_create(&t, NULL, compiler, NULL);
-        pthread_setname_np(t, "vu-compiler");
+        platform_thread_name(t, "vu-compiler");
         pthread_detach(t);
     }
     return 1;

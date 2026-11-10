@@ -68,12 +68,29 @@ static int movie_w, movie_h, movie_on;
 
 /* ------------------------------------------------------------------------------- setup */
 
-static SDL_GPUShader *shader(const unsigned char *code, size_t size, SDL_GPUShaderStage stage, int samplers_n, int uniforms_n) {
+/* the shader formats this build has: SPIR-V (Vulkan), and MSL (Metal, macOS) when spirv-cross made it */
+#ifdef SHADERS_MSL
+#define SHADER_FORMATS (SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_MSL)
+#define SHADER(name) name##_spv, sizeof name##_spv, name##_msl, sizeof name##_msl
+#else
+#define SHADER_FORMATS SDL_GPU_SHADERFORMAT_SPIRV
+#define SHADER(name) name##_spv, sizeof name##_spv, NULL, 0
+#endif
+
+static SDL_GPUShader *shader(const unsigned char *spv, size_t spv_size, const unsigned char *msl, size_t msl_size,
+                             SDL_GPUShaderStage stage, int samplers_n, int uniforms_n) {
     SDL_GPUShaderCreateInfo ci = {0};
-    ci.code = code;
-    ci.code_size = size;
-    ci.entrypoint = "main";
-    ci.format = SDL_GPU_SHADERFORMAT_SPIRV;
+    if (msl && !(SDL_GetGPUShaderFormats(dev) & SDL_GPU_SHADERFORMAT_SPIRV)) {
+        ci.code = msl;                  /* Metal: spirv-cross names the entry point main0 */
+        ci.code_size = msl_size;
+        ci.entrypoint = "main0";
+        ci.format = SDL_GPU_SHADERFORMAT_MSL;
+    } else {
+        ci.code = spv;
+        ci.code_size = spv_size;
+        ci.entrypoint = "main";
+        ci.format = SDL_GPU_SHADERFORMAT_SPIRV;
+    }
     ci.stage = stage;
     ci.num_samplers = samplers_n;
     ci.num_uniform_buffers = uniforms_n;
@@ -157,7 +174,7 @@ int gpu_init(void *sdl_window) {
         SDL_GetWindowSizeInPixels(win, &w, &h);
         scale = scale_for(h < w * 3 / 4 ? h : w * 3 / 4);
     }
-    dev = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV, false, NULL);
+    dev = SDL_CreateGPUDevice(SHADER_FORMATS, false, NULL);
     if (!dev) { rt_log("gpu", "no GPU device: %s", SDL_GetError()); return -1; }
     if (win && !SDL_ClaimWindowForGPUDevice(dev, win)) { rt_log("gpu", "window: %s", SDL_GetError()); return -1; }
     rt_log("gpu", "%s renderer, scale %d", SDL_GetGPUDeviceDriver(dev), scale);
@@ -165,10 +182,10 @@ int gpu_init(void *sdl_window) {
                                              SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET)
                     ? SDL_GPU_TEXTUREFORMAT_D32_FLOAT : SDL_GPU_TEXTUREFORMAT_D24_UNORM;
     swap_fmt = win ? SDL_GetGPUSwapchainTextureFormat(dev, win) : SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
-    vs = shader(gs_vert_spv, sizeof gs_vert_spv, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
-    fs = shader(gs_frag_spv, sizeof gs_frag_spv, SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
-    pvs = shader(present_vert_spv, sizeof present_vert_spv, SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
-    pfs = shader(present_frag_spv, sizeof present_frag_spv, SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+    vs = shader(SHADER(gs_vert), SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
+    fs = shader(SHADER(gs_frag), SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+    pvs = shader(SHADER(present_vert), SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
+    pfs = shader(SHADER(present_frag), SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
     for (int i = 0; i < 8; i++) {
         SDL_GPUSamplerCreateInfo si = {0};
         si.min_filter = si.mag_filter = (i & 1) ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;

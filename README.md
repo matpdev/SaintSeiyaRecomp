@@ -5,7 +5,7 @@
 [![Listed on PlayPorted](https://playported.com/badge.svg)](https://playported.com/ports/1243-saint-seiya-the-hades/)
 [![CI](https://github.com/matpdev/SaintSeiyaRecomp/actions/workflows/ci.yml/badge.svg)](https://github.com/matpdev/SaintSeiyaRecomp/actions/workflows/ci.yml)
 
-A native PC (Linux and Windows) port of **Saint Seiya: The Hades** (PS2, Europe, SLES-54162, and the Japanese
+A native PC (Linux and Windows) and Mac (Apple Silicon) port of **Saint Seiya: The Hades** (PS2, Europe, SLES-54162, and the Japanese
 release, Meiou Hades Juunikyuu-hen, SLPS-25744), made by static
 recompilation, with a matching decompilation moving forward alongside it. Modelled on
 [Tenkaichi3Decomp](https://github.com/z3xox/Tenkaichi3Decomp).
@@ -38,7 +38,7 @@ controller and memory card.
 | Extras | a training mode the original doesn't have (F5: idle opponent, infinite life, damage and inputs on screen); a second gamepad plays as player 2 |
 | Decompilation | compiler identified (Metrowerks CodeWarrior PS2 3.0.1, `-O3`, C++), 327 library functions named; no game function decompiled yet |
 | Memory card | slot 1 is a folder (`~/.local/share/sstheh/memcard1`): the game saves and loads normally |
-| Missing | full playthrough testing, macOS; the Windows build is tested with Wine only so far |
+| Missing | full playthrough testing; the Windows build is tested with Wine only so far; macOS has no prebuilt release yet (build it, below) |
 
 Details in [`docs/roadmap.md`](docs/roadmap.md) and [`docs/recon.md`](docs/recon.md).
 
@@ -109,6 +109,22 @@ fetches SDL3, FFmpeg and builds FreeType into `tools/win/`; after the Linux buil
 zip (`dist/SaintSeiyaDecomp-windows-x64.zip`: the game, the setup with Qt 6's llvm-mingw build from `tools/win/qt`,
 the libraries' licenses). On Windows the settings and the memory card are in `%APPDATA%\sstheh`. Tested with Wine.
 
+### macOS (Apple Silicon)
+
+The port builds natively on Macs with Apple Silicon (M1 and later), with clang and the libraries from
+[Homebrew](https://brew.sh); the picture goes through Metal (the shaders are also made as MSL with `spirv-cross`)
+and the 128-bit SIMD through [sse2neon](https://github.com/DLTcollab/sse2neon). Intel Macs are not supported.
+
+```sh
+xcode-select --install                     # clang, if it is not there yet
+brew install python shaderc spirv-cross pkg-config sdl3 ffmpeg freetype
+./build.sh /path/to/game.iso               # with no argument, the system's file picker opens
+./play.sh                                  # ./play.sh --shortcut: an app in ~/Applications
+```
+
+The settings and the memory card are in `~/Library/Application Support/sstheh` (instead of `~/.local/share/sstheh`
+in the paths below), the VU1 programs compiled at run time in `~/Library/Caches/sstheh`.
+
 ### Linux release (AppImage)
 
 `tools/release.sh linux` makes `dist/SaintSeiyaDecomp-x86_64.AppImage` (about 90 MB) in a Debian 13 container
@@ -119,8 +135,8 @@ SDL 3.2, the AppImage has no texture packs (PNG needs SDL 3.4).
 
 ### Checks and releases
 
-Every push runs [CI](.github/workflows/ci.yml) on GitHub: the port's own code compiled for Linux and Windows
-(warnings are errors), the setup, the Python tools (`tools/ci_check.sh linux|windows|python` does the same
+Every push runs [CI](.github/workflows/ci.yml) on GitHub: the port's own code compiled for Linux, Windows and
+macOS (warnings are errors), the setup, the Python tools (`tools/ci_check.sh linux|windows|macos|python` does the same
 locally). A push to `master` that passes gets the next version (`v0.1.0`, `v0.1.1`...; `#minor` or `#major` in a
 commit message bumps that number instead) and a release with the Windows zip and the AppImage, built on GitHub
 from the repository alone (`tools/release.sh windows|linux`, the same here). The game's code is in `generated/`;
@@ -262,5 +278,5 @@ playing and reporting what breaks.
 ## Licenses
 
 The code in this repository is under the MIT license ([`LICENSE`](LICENSE)). It does not cover the game, which is
-not included and belongs to its owners. Parts of the renderer come from Tenkaichi3Decomp (MIT, in `licenses/`). The Metrowerks compilers are
+not included and belongs to its owners. Parts of the renderer come from Tenkaichi3Decomp (MIT, in `licenses/`); `port/runtime/third_party/sse2neon.h` is sse2neon (MIT, in `licenses/`). The Metrowerks compilers are
 proprietary software archived by decomp.me; use them only if you are entitled to.

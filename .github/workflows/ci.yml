@@ -1,4 +1,4 @@
-# Every push and pull request: the port's own code compiled for Linux and Windows with warnings as errors,
+# Every push and pull request: the port's own code compiled for Linux, Windows and macOS with warnings as errors,
 # the setup, the Python tools (tools/ci_check.sh).
 #
 # A push to master that passes gets the next version (tools/next_version.sh: v0.1.0, v0.1.1...; #minor or
@@ -51,6 +51,15 @@ jobs:
         run: sh tools/win_deps.sh
       - name: Port (MinGW-w64)
         run: tools/ci_check.sh windows
+
+  macos:
+    runs-on: macos-15         # Apple Silicon
+    steps:
+      - name: Tools and libraries
+        run: brew install shaderc spirv-cross pkg-config sdl3 ffmpeg freetype
+      - uses: actions/checkout@v7
+      - name: Port (clang, arm64; shaders also as MSL)
+        run: tools/ci_check.sh macos
 
   # ---- releases: only a push to master
   version:
