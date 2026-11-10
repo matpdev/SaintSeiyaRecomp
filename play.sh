@@ -13,6 +13,29 @@ DIR=$PWD
 
 case "${1:-}" in
     --shortcut|--atalho)
+        if [ "$(uname -s)" = Darwin ]; then         # macOS: a small app in ~/Applications that runs this script
+            APP="$HOME/Applications/Saint Seiya The Hades.app"
+            mkdir -p "$APP/Contents/MacOS"
+            cat > "$APP/Contents/MacOS/sstheh" <<LAUNCHER
+#!/bin/sh
+exec "$DIR/play.sh" "\$@"
+LAUNCHER
+            chmod +x "$APP/Contents/MacOS/sstheh"
+            cat > "$APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleName</key><string>Saint Seiya: The Hades</string>
+    <key>CFBundleExecutable</key><string>sstheh</string>
+    <key>CFBundleIdentifier</key><string>io.github.saintseiyarecomp.sstheh</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
+    <key>NSHighResolutionCapable</key><true/>
+</dict></plist>
+PLIST
+            echo "✓ shortcut created: $APP"
+            exit 0
+        fi
         APPS="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
         mkdir -p "$APPS"
         cat > "$APPS/sstheh.desktop" <<DESKTOP
