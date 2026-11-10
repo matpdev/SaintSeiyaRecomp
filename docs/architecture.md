@@ -102,7 +102,7 @@ what must be found again for another build of the game (the Japanese release, a 
 | Folder | Contents |
 |---|---|
 | `port/main.c` | Command line, start-up |
-| `port/runtime/` | Guest CPU helpers (`r5900.h`: registers, memory access, FPU rules), memory map and ELF loading, logging, crash reports, profiler, platform layer (Linux / Windows) |
+| `port/runtime/` | Guest CPU helpers (`r5900.h`: registers, memory access, FPU rules), memory map and ELF loading, logging, crash reports, profiler, platform layer (Linux / Windows / macOS), `simd.h` (SSE on x86-64, sse2neon on arm64) |
 | `port/kernel/` | The EE kernel: threads, semaphores, interrupts, alarms, syscalls |
 | `port/iop/` | IOP services (SIF, RPC), pads, CRI ADX audio; `lle/`: the IOP modules that run as they are (MIPS I interpreter, SPU2) |
 | `port/gs/` | DMAC, VIF, VU0/VU1, GS, Vulkan renderer, window, texture packs, recordings |
