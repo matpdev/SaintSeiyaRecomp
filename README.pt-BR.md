@@ -40,7 +40,10 @@ controle e memory card.
 | Memory card | o slot 1 é uma pasta (`~/.local/share/sstheh/memcard1`): o jogo salva e carrega normalmente |
 | Falta | testes do começo ao fim; o build de Windows só foi testado com Wine até agora; o macOS ainda não tem release pronto (compile, abaixo) |
 
-Detalhes técnicos (em inglês) em [`docs/roadmap.md`](docs/roadmap.md) e [`docs/recon.md`](docs/recon.md).
+Detalhes técnicos (em inglês) em [`docs/roadmap.md`](docs/roadmap.md) e [`docs/recon.md`](docs/recon.md). A seção
+[Goals](docs/roadmap.md#goals) do roadmap (em inglês) lista as metas do projeto: imagem em widescreen e HD, opções de
+jogo, mods (instalados sem recompilar e sem acesso ao computador), jogo online com rollback e os lançamentos para
+Windows e Android.
 
 ## Jogar (só o port)
 

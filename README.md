@@ -40,7 +40,10 @@ controller and memory card.
 | Memory card | slot 1 is a folder (`~/.local/share/sstheh/memcard1`): the game saves and loads normally |
 | Missing | full playthrough testing; the Windows build is tested with Wine only so far; macOS has no prebuilt release yet (build it, below) |
 
-Details in [`docs/roadmap.md`](docs/roadmap.md) and [`docs/recon.md`](docs/recon.md).
+Details in [`docs/roadmap.md`](docs/roadmap.md) and [`docs/recon.md`](docs/recon.md). The roadmap's
+[Goals](docs/roadmap.md#goals) section lists what the project aims to have: widescreen and HD image work, game
+options, mods (installable without recompiling, and unable to reach your computer), online play with rollback,
+and the Windows and Android releases.
 
 ## Playing (the port only)
 
