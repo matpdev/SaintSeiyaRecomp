@@ -253,6 +253,7 @@ How the parts fit together: [docs/architecture.md](docs/architecture.md); debugg
 | `build.sh`, `play.sh`, `tools/disc.py` | build from your ISO, play; disc check |
 | `tools/fdiff.py` | compiles a `.cpp` and compares each function with the original |
 | `tools/recon/` | reconnaissance scripts (compiler classification, cross references) |
+| `tools/icon/` | the game's icon as SVG; `make.sh` makes the Windows `.ico` and the PNGs of the AppImage and the setup from it |
 
 ## Contributing
 

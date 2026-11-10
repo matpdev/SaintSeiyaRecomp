@@ -341,7 +341,7 @@ static int install_cli(const QString &iso, const Options &o) {
 
 /* --------------------------------------------------------------------------------- the window */
 
-/* The look: night blue and gold, as the icon; drawn here, nothing from the game. The same on Linux and
+/* The look: night blue and gold; drawn here, nothing from the game. The same on Linux and
  * Windows (Fusion style with this palette and style sheet). */
 namespace look {
 const QColor night(0x0f, 0x0e, 0x24), card(0x17, 0x15, 0x3a), line(0x2a, 0x27, 0x60);
@@ -408,31 +408,8 @@ void apply(QApplication &app) {
     app.setStyleSheet(QString::fromLatin1(sheet).replace("%CHECK%", check));
 }
 
-/* the icon (as tools/appimage/saintseiyadecomp.png): gold "SS" on night blue */
-QIcon icon() {
-    QIcon ic;
-    for (int n : {16, 32, 48, 64, 128, 256}) {
-        QPixmap pm(n, n);
-        pm.fill(QColor(0x1c, 0x1a, 0x45));
-        QPainter g(&pm);
-        g.setRenderHint(QPainter::Antialiasing);
-        g.setPen(QPen(gold, qMax(1.0, n / 32.0)));
-        g.drawRect(QRectF(n * 0.05, n * 0.05, n * 0.9, n * 0.9));
-        QFont f;
-        f.setPixelSize(int(n * 0.42));
-        g.setFont(f);
-        g.drawText(QRectF(0, 0, n, n * 0.78), Qt::AlignCenter, "SS");
-        if (n >= 48) {
-            f.setPixelSize(int(n * 0.12));
-            g.setFont(f);
-            g.setPen(Qt::white);
-            g.drawText(QRectF(0, n * 0.62, n, n * 0.2), Qt::AlignCenter, "HADES");
-        }
-        g.end();
-        ic.addPixmap(pm);
-    }
-    return ic;
-}
+/* the icon: tools/setup/icon.png, built in (made from tools/icon/sstheh.svg by tools/icon/make.sh) */
+QIcon icon() { return QIcon(QStringLiteral(":/icon.png")); }
 } // namespace look
 
 /* The top of the window: a night sky with a constellation (Pegasus), the title, the version */

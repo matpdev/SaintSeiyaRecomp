@@ -22,7 +22,7 @@ Name=Saint Seiya: The Hades
 Comment=Native PC port (from your own disc)
 Exec="$DIR/play.sh"
 Path=$DIR
-Icon=applications-games
+Icon=$DIR/tools/appimage/saintseiyadecomp.png
 Terminal=false
 Categories=Game;
 DESKTOP

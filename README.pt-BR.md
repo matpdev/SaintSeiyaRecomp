@@ -251,6 +251,7 @@ depuração: [docs/depuracao.pt-BR.md](docs/depuracao.pt-BR.md).
 | `port/gs/` | DMA, VIF, VU, GS e renderer Vulkan |
 | `tools/fdiff.py` | compila um `.cpp` e compara cada função com o original |
 | `tools/recon/` | scripts de reconhecimento (classificação de compiladores, referências cruzadas) |
+| `tools/icon/` | o ícone do jogo em SVG; o `make.sh` gera a partir dele o `.ico` do Windows e os PNG do AppImage e do instalador |
 
 ## Contribuindo
 
