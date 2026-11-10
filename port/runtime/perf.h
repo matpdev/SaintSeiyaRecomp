@@ -2,7 +2,9 @@
 #pragma once
 #include <stdint.h>
 #include <time.h>
+#if defined(__x86_64__) || defined(_M_X64)
 #include <x86intrin.h>
+#endif
 
 typedef struct {
     volatile uint64_t gs_ns;     /* GIF/GS: unpacking packets, rasterising */
@@ -26,9 +28,20 @@ static inline uint64_t perf_now(void) {
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
+/* a cycle counter: the TSC on x86-64, the generic timer (CNTVCT_EL0) on arm64 */
+static inline uint64_t perf_cycles(void) {
+#if defined(__aarch64__)
+    uint64_t t;
+    __asm__ volatile("mrs %0, cntvct_el0" : "=r"(t));
+    return t;
+#else
+    return __rdtsc();
+#endif
+}
+
 /* A time stamp for the VU / GS shares (CPU cycles: thousands are taken per frame), 0 when nobody
  * looks at them; perf_since() is the nanoseconds since one. */
 extern double perf_tsc_ns;      /* nanoseconds per cycle, measured at start (perf_calibrate) */
 void perf_calibrate(void);
-static inline uint64_t perf_stamp(void) { return perf_timing ? __rdtsc() | 1 : 0; }
-static inline uint64_t perf_since(uint64_t t) { return (uint64_t)((double)(__rdtsc() - t) * perf_tsc_ns); }
+static inline uint64_t perf_stamp(void) { return perf_timing ? perf_cycles() | 1 : 0; }
+static inline uint64_t perf_since(uint64_t t) { return (uint64_t)((double)(perf_cycles() - t) * perf_tsc_ns); }

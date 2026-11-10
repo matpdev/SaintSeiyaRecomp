@@ -7,7 +7,6 @@
 #define _GNU_SOURCE
 #include <stdint.h>
 #include <time.h>
-#include <x86intrin.h>
 #include "perf.h"
 
 /* the time stamp counter's rate */
@@ -16,11 +15,11 @@ double perf_tsc_ns = 0.25;
 void perf_calibrate(void) {
     struct timespec a, b;
     clock_gettime(CLOCK_MONOTONIC, &a);
-    uint64_t c0 = __rdtsc();
+    uint64_t c0 = perf_cycles();
     struct timespec d = {0, 20000000};
     nanosleep(&d, NULL);
     clock_gettime(CLOCK_MONOTONIC, &b);
-    uint64_t c1 = __rdtsc();
+    uint64_t c1 = perf_cycles();
     double ns = (b.tv_sec - a.tv_sec) * 1e9 + (b.tv_nsec - a.tv_nsec);
     if (c1 > c0) perf_tsc_ns = ns / (double)(c1 - c0);
 }
@@ -35,11 +34,16 @@ void prof_report(void) {}
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/syscall.h>
 #include <sys/time.h>
 #include <time.h>
-#include <ucontext.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <pthread.h>
+#include <sys/ucontext.h>     /* (<ucontext.h> wants _XOPEN_SOURCE there) */
+#else
+#include <sys/syscall.h>
+#include <ucontext.h>
+#endif
 
 #include "perf.h"
 
@@ -50,13 +54,36 @@ static volatile int nsamples;
 static unsigned prof_from;
 unsigned kernel_vblank_count(void);
 
+/* the interrupted instruction and the thread it is on */
+static void *sample_pc(ucontext_t *uc) {
+#if defined(__APPLE__) && defined(__aarch64__)
+    return (void *)uc->uc_mcontext->__ss.__pc;
+#elif defined(__APPLE__)
+    return (void *)uc->uc_mcontext->__ss.__rip;
+#elif defined(__aarch64__)
+    return (void *)uc->uc_mcontext.pc;
+#else
+    return (void *)uc->uc_mcontext.gregs[REG_RIP];
+#endif
+}
+
+static int thread_id(void) {
+#ifdef __APPLE__
+    uint64_t t = 0;
+    pthread_threadid_np(NULL, &t);
+    return (int)t;
+#else
+    return (int)syscall(SYS_gettid);
+#endif
+}
+
 static void on_prof(int sig, siginfo_t *si, void *uc_) {
     (void)sig;
     (void)si;
     ucontext_t *uc = uc_;
     if (kernel_vblank_count() < prof_from) return;
     int i = __atomic_fetch_add(&nsamples, 1, __ATOMIC_RELAXED);
-    if (i < MAX_SAMPLES) { samples[i] = (void *)uc->uc_mcontext.gregs[REG_RIP]; sample_tid[i] = (int)syscall(SYS_gettid); }
+    if (i < MAX_SAMPLES) { samples[i] = sample_pc(uc); sample_tid[i] = thread_id(); }
 }
 
 void prof_start(void) {

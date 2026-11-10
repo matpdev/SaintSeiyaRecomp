@@ -3,7 +3,7 @@
  * programs translated to C (vu_jit.c), which include this header when they are compiled.
  */
 #pragma once
-#include <immintrin.h>
+#include "simd.h"
 #include <math.h>
 #include <string.h>
 
