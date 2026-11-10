@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Native Linux/Windows port of **Saint Seiya: The Hades** (PS2; EU SLES-54162 and JP SLPS-25744, one executable
+Native Linux/Windows/macOS (Apple Silicon) port of **Saint Seiya: The Hades** (PS2; EU SLES-54162 and JP SLPS-25744, one executable
 plays both) by **static recompilation**: the game's MIPS R5900 code is translated to C (`tools/recomp/recomp.py`)
 and the port supplies what the PS2 had around the CPU (kernel, IOP, VUs, GS → Vulkan). A matching decompilation
 of the original executable runs alongside. Read [docs/architecture.md](docs/architecture.md) before touching `port/`.
@@ -22,9 +22,10 @@ of the original executable runs alongside. Read [docs/architecture.md](docs/arch
 | Build everything (needs an ISO) | `./build.sh [game.iso]` (`--clean` rebuilds from scratch) |
 | Run | `./play.sh` · `./build/sstheh [-q\|-v\|-vv] [--iso f]` |
 | Re-configure / build by hand | `python3 configure.py [--march=native] [--no-split] [--windows]` then `ninja port` (use `.venv/bin`) |
-| Checks without a disc | `tools/ci_check.sh linux\|windows\|python` (port code with `-Wall -Wextra -Werror`) |
+| Checks without a disc | `tools/ci_check.sh linux\|windows\|macos\|python` (port code with `-Wall -Wextra -Werror`) |
 | Headless screenshots | `./build/sstheh -q --press "1100:CROSS" --shot 3100` → `build/shot_N.ppm` |
 | Windows cross-build deps | `tools/win_deps.sh` (SDL3, FFmpeg, FreeType into `tools/win/`), then `configure.py --no-split --windows` |
+| macOS (arm64) deps | `brew install python shaderc spirv-cross pkg-config sdl3 ffmpeg freetype`, then `./build.sh` (clang, Metal; shaders also as MSL) |
 | Releases | `tools/release.sh windows\|linux` |
 
 Without a disc only `ci_check.sh` (and a build from the committed `generated/`) can run; the game itself cannot.
@@ -46,6 +47,8 @@ Without a disc only `ci_check.sh` (and a build from the committed `generated/`) 
   (`before` = hook, otherwise replacement) — and to `config/jp/hle.txt` if the JP release needs it.
 - Two releases: native code reads addresses from `game_addr` (the per-release column of `game.h`); don't hard-code
   EU addresses in logic.
+- SIMD goes through `port/runtime/simd.h` (SSE on x86-64, vendored sse2neon on arm64); OS differences (paths, thread names,
+  sleeps) go through `port/runtime/platform.c`, never `#ifdef` in feature code. Don't edit `port/runtime/third_party/`.
 - C style of the neighbouring file; short comments explaining the PS2 hardware. Warnings are errors in CI.
 - Decompilation: `tools/fdiff.py src/file.cpp` until `OK`; the build must end `OK: build matches the original`.
   (`src/` and `asm/` exist only locally after a build with a disc.)
