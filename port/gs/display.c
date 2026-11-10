@@ -5,7 +5,9 @@
  * The game runs on its own host threads; this side only reads GS memory, once per vertical blank.
  */
 #include <SDL3/SDL.h>
-#include <malloc.h>
+#ifdef __GLIBC__
+#include <malloc.h>   /* mallinfo2: the heap in SSTHEH_PERF_LOG */
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -398,7 +400,7 @@ static void panel_update(void) {
     else snprintf(size, sizeof size, "full screen");
     snprintf(panel.line[3], 96, "F1: %s  F2: %s  F3: hide  F4: vsync %s", size, widescreen_on() ? "16:9" : "4:3", gpu_on && gpu_vsync() ? "on" : "off");
     if (getenv("SSTHEH_PERF_LOG")) {
-#ifndef _WIN32
+#ifdef __GLIBC__
         struct mallinfo2 mi = mallinfo2();
         fprintf(stderr, "[perf %5u] %s | %s | %s | heap %zu MB mmap %zu MB\n", kernel_vblank_count(), panel.line[0], panel.line[1],
                 panel.line[2], mi.uordblks >> 20, mi.hblkhd >> 20);

@@ -60,7 +60,7 @@ typedef struct { int used, cause, enabled; u32 handler, arg, next; } Handler;
 typedef struct { int used; u64 when; u32 handler, arg; } Alarm;
 
 /* recursive: interrupt handlers run with the lock held and make (i-prefixed) syscalls */
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
 static pthread_mutex_t big = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
 #else
 static pthread_mutex_t big = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
@@ -340,7 +340,7 @@ static void start_host(int id) {
     pthread_create(&t->host, &a, thread_main, (void *)(intptr_t)id);
     char name[16];
     snprintf(name, sizeof name, "ee-%d", id);
-    pthread_setname_np(t->host, name);
+    platform_thread_name(t->host, name);
     pthread_attr_destroy(&a);
 }
 
@@ -637,7 +637,7 @@ void kernel_init(void) {
     iop_init();
     pthread_t timer;
     pthread_create(&timer, NULL, timer_main, NULL);
-    pthread_setname_np(timer, "vblank");
+    platform_thread_name(timer, "vblank");
 }
 
 void kernel_run(u32 entry) {

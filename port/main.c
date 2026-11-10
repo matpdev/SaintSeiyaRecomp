@@ -168,7 +168,7 @@ int main(int argc, char **argv) {
     pthread_attr_init(&a);
     pthread_attr_setstacksize(&a, 64 << 20);
     pthread_create(&game, &a, game_main, NULL);
-    pthread_setname_np(game, "game");
+    platform_thread_name(game, "game");
     if (nshots) return display_shots(shots, nshots);
     return display_window();
 }
