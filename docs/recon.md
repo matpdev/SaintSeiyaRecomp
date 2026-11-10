@@ -1,5 +1,7 @@
 # Reconnaissance of the executable (2026-10-13)
 
+Portuguese: [recon.pt-BR.md](recon.pt-BR.md).
+
 Everything here was measured on `disc/SLES_541.62` (Europe, SHA-1 `7ba6b0a1…e79e6`). Where something is a
 deduction, it says so.
 

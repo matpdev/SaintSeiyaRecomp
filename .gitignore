@@ -27,4 +27,5 @@ build-ci/
 /generated-jp/recomp/report.txt
 /asm-jp/
 /src-jp/
+CLAUDE.local.md
 .DS_Store

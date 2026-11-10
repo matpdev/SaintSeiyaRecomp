@@ -1,5 +1,7 @@
 # Roadmap: from the executable to the game running on PC
 
+Portuguese: [roadmap.pt-BR.md](roadmap.pt-BR.md).
+
 Decided on 2026-10-13: **the hybrid path**. Every function not decompiled yet is translated automatically from
 MIPS (R5900) to C by the recompiler. The result is linked with a platform layer that plays the part of the
 PS2's hardware. The matching decomp goes on in parallel, and each decompiled function replaces the translated
@@ -30,11 +32,12 @@ one.
 
 ## Status
 
-**Updated 2026-10-15:** milestones 1 to 6 done. The game runs natively from the title screen to 3D fights,
-with music and voices (CRI ADXI), sound effects (the disc's own SSD/RSSD driver on an emulated IOP and SPU2),
-controller (PADMAN) and memory card (libmc2 on a folder). Vulkan renderer through SDL3 GPU, VU1 programs
-translated to native code, 60 Hz with interpolated frames. Left: SPU2 reverb and full playthrough testing.
-The opening video plays since 2026-11-01 (FFmpeg).
+**Updated 2026-11-10:** milestones 1 to 6 done, and most of 7. The game runs natively from the title screen to 3D
+fights, with music and voices (CRI ADXI), sound effects (the disc's own SSD/RSSD driver on an emulated IOP and
+SPU2, with reverb), controller (PADMAN) and memory card (libmc2 on a folder). Vulkan renderer through SDL3 GPU,
+VU1 programs translated to native code, 60 Hz with interpolated frames, 16:9 widescreen. The opening video plays
+(FFmpeg, since 2026-11-01). The Japanese release (SLPS-25744) runs from the same executable
+([versions.md](versions.md)). Left: full playthrough testing, macOS, and the decompilation itself.
 
 ### History
 
