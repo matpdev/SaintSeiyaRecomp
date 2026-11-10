@@ -1,6 +1,7 @@
 /disc/*
 !/disc/README.md
 /.venv/
+CLAUDE.local.md
 /tools/dl/
 /tools/compilers/
 /tools/binutils/
@@ -27,4 +28,3 @@ build-ci/
 /generated-jp/recomp/report.txt
 /asm-jp/
 /src-jp/
-CLAUDE.local.md
