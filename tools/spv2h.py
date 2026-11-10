@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""spv2h.py out.h a.vert.spv b.frag.spv ...: SPIR-V binaries as C byte arrays (a_vert_spv, ...)."""
+"""spv2h.py out.h a.vert.spv b.frag.spv [a.vert.msl ...]: the shaders as C byte arrays (a_vert_spv, ...).
+
+SPIR-V for Vulkan (and Direct3D 12 through SDL); MSL, made from the SPIR-V by spirv-cross, for Metal on
+macOS: given any, the header defines SHADERS_MSL."""
 import os
 import sys
 
@@ -12,3 +15,5 @@ with open(out, "w") as f:
         f.write(f"static const unsigned char {name}[{len(data)}] = {{")
         f.write(",".join(str(b) for b in data))
         f.write("};\n")
+    if any(p.endswith(".msl") for p in sys.argv[2:]):
+        f.write("#define SHADERS_MSL 1\n")
