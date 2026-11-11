@@ -35,7 +35,7 @@ controller and memory card.
 | Sound | music and voices (CRI ADX) and **sound effects** (hits, footsteps, menus: the disc's SSD/RSSD driver, interpreted, playing on an emulated SPU2), with the SPU2's reverb |
 | Video | the opening video (Sofdec), decoded with FFmpeg |
 | Text | the game's texts drawn with a font file at 4x (M PLUS Rounded 1c, downloaded into `fonts/` by `build.sh` / `tools/fetch_font.sh`), in the game's own layout and colours |
-| Extras | a training mode the original doesn't have (F5: idle opponent, infinite life, damage and inputs on screen); a second gamepad plays as player 2 |
+| Extras | a training mode the original doesn't have (F5: idle opponent, block (after first hit, always), infinite life, full cosmo, infinite time, damage and inputs on screen); a second gamepad plays as player 2 |
 | Decompilation | compiler identified (Metrowerks CodeWarrior PS2 3.0.1, `-O3`, C++), 327 library functions named; no game function decompiled yet |
 | Memory card | slot 1 is a folder (`~/.local/share/sstheh/memcard1`): the game saves and loads normally |
 | Missing | full playthrough testing; the Windows build is tested with Wine only so far; macOS has no prebuilt release yet (build it, below) |
@@ -180,8 +180,15 @@ COM fight with training mode on (choosing another mode there goes back to the F5
 F5 (or Select + Start) opens a menu over the game; it drives with the pad (↑/↓, ✕ changes, ○ closes) and its
 choices are remembered. With *Training mode* on, in every fight:
 
-- *Opponent (computer)*: idle — a computer-played fighter stands still (moves already started finish); or plays as usual;
+- *Opponent (computer)*: idle — a computer-played fighter stands still (moves already started finish, and it never
+  burns its cosmo); or plays as usual;
+- *Block* (idle opponent, ←/→ picks): *after first hit* — the first hit lands, then it guards as soon as it is out of
+  the hit, so a move that doesn't combo is blocked, and half a second after the last hit or block it stands idle again;
+  *always*; *off*;
 - *Infinite life*: life comes back to full a second after the last hit, and a hit never knocks out;
+- *Cosmo always full*: both fighters' three cosmo bars stay full (burning it, △ + ○, spends them as usual; they are
+  full again when it is over);
+- *Infinite time* (on by default): no time limit, the timer shows ∞;
 - *Show damage*: each fighter's life, the last hit's damage and the combo's (damage and hits);
 - *Show inputs*: player 1's inputs, newest first (direction in numpad notation, 5 = neutral, 6 = right), with the
   frames each was held.

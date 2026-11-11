@@ -37,6 +37,7 @@ typedef enum { GAME_EU, GAME_JP, GAME_VERSIONS } GameVersion;
     X(FN_ELEMENT_ATTACH,    0x0030D620u, 0x00312520u) /* (element): an element tied to its model */ \
     X(FN_CAROUSEL_AT,       0x0031EFD0u, 0x00323DA0u) /* (list, offset) -> the item that far from the cursor */ \
     X(FN_CAROUSEL_NEXT,     0x0031F0B0u, 0x00323E80u) /* (list, item) -> the next item */ \
+    X(FN_COM_BURN_DRAW,     0x003B4860u, 0x003BABC0u) /* (computer's mind) -> burn the cosmo now? a draw */ \
     /* ---- return addresses (the call sites a hook acts for) */ \
     X(RA_BB_EVENTS_LO,      0x001B9F00u, 0x001BB200u) /* the Big Bang events' code, from here ... */ \
     X(RA_BB_EVENTS_HI,      0x001C0400u, 0x001C1AD0u) /* ... to here */ \
@@ -86,6 +87,7 @@ extern GameVersion game_version;
 #define FN_ELEMENT_ATTACH   game_addr[GA_FN_ELEMENT_ATTACH]
 #define FN_CAROUSEL_AT      game_addr[GA_FN_CAROUSEL_AT]
 #define FN_CAROUSEL_NEXT    game_addr[GA_FN_CAROUSEL_NEXT]
+#define FN_COM_BURN_DRAW    game_addr[GA_FN_COM_BURN_DRAW]
 #define RA_BB_EVENTS_LO     game_addr[GA_RA_BB_EVENTS_LO]
 #define RA_BB_EVENTS_HI     game_addr[GA_RA_BB_EVENTS_HI]
 #define RA_BB_COUNTER       game_addr[GA_RA_BB_COUNTER]
@@ -115,8 +117,22 @@ extern GameVersion game_version;
 /* ---- offsets in the game's objects (the same in both releases as far as checked) */
 #define BATTLE_FIGHTERS     968u            /* battle: the two fighters (+968, +972), then their controllers */
 #define FIGHTER_LIFE        0x87B0u         /* fighter: its life block (a float, life out of 100, at +0) */
+#define LIFE_COSMO          0x4u            /* life block: the cosmo gauge (float, 0..COSMO_FULL; three bars) */
+#define LIFE_COSMO_BARS     0x8u            /* ... the bars full (u16: 0..3, 4 while burning) */
+#define LIFE_COSMO_BURNING  0xAu            /* ... a byte: the cosmo burning (Triangle + Circle, the bars spent) */
+#define COSMO_FULL          1000.0f
+#define BATTLE_TIME_LIMIT   0x34Eu          /* battle: a round's time (u16; 0: no limit, the timer shows infinity) */
+#define BATTLE_TIMER        0x75Cu          /* ... the time left (float, from the limit down to 0: time over) */
 #define LIFE_FINISHING      0x5Cu           /* life block: a byte, set by a finishing blow (no revival) */
+#define FIGHTER_STATE       0x8790u         /* fighter: its state (u32): FS_... */
+#define FS_STAND            0u              /* ... standing, doing nothing */
+#define FS_GUARD            1u              /* ... guarding */
+#define FS_GUARD_HIT        2u              /* ... a hit blocked */
+#define FS_COSMO_BURN       0x1Au           /* ... burning the cosmo (Triangle + Circle); others: moving, attacking, a hit taken (0x20...), getting up (0x17) */
+#define CTL_FIGHTER         0u              /* controller: its fighter */
 #define CTL_VTABLE          8u              /* controller: its method table */
+#define COM_MIND            0x18u           /* computer controller: its mind (what it would do) */
+#define COM_GUARD           1u              /* computer controller's decision: guard (as R1 held) */
 #define CTL_PORT            0x18u           /* controller: its pad port (s16; < 0 or > 1: none) */
 #define PAD_PORT_STRIDE     0xE4u           /* pad manager: one player's pad after the other */
 #define PAD_PRESSED_WORD    0x44u           /* ... the buttons pressed this frame (u16) */

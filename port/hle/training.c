@@ -2,9 +2,12 @@
  * Training: a menu (F5, or SELECT + START on a gamepad; keyboard: arrows, Z = cross, X = circle)
  * turns on, for any fight,
  *   - an idle opponent: a computer-played fighter does nothing (it still blocks nothing and
- *     never attacks), so moves and combos can be tried on it;
+ *     never attacks, nor burns its cosmo), so moves and combos can be tried on it;
+ *   - block (idle opponent): after the first hit (it guards once out of a hit, for half a second),
+ *     always or off;
  *   - infinite life: a fighter's life comes back to full a second after the last hit taken,
  *     and a hit is never allowed to knock it out;
+ *   - cosmo always full (the three bars), and infinite time (no time limit);
  *   - the damage of the last hit and of the combo, and the life of both;
  *   - the first player's inputs, newest first, with how many frames each was held.
  * The same menu has, for every fight, training or not, "Auto-mash (Big Bang)", "Revival (Athena)" and
@@ -22,7 +25,12 @@
  *              +0x164..0x166, read by its query methods (0x00315610...): cleared here, the
  *              fighter is idle.
  *   0x0031E5F0 a hit's damage (a0 = life block, f12 = base damage): life -= damage, clamped
- *              to <= 100 only.
+ *              to <= 100 only. The same block has the cosmo: +4 the gauge (0..1000), +8 the bars
+ *              full (0..3, 4 burning), +0xA burning (0x0031EB90 starts it, 0x0031ED00 sets the gauge).
+ *   0x002FF190 the controllers' step: with the three bars, asks the controller's +0x80 method (the
+ *              player's: Triangle + Circle; the computer's 0x00315310, a draw) and burns the cosmo
+ *              (fighter state 0x1A at fighter +0x8790; 0 standing, 1 guarding, 2 a hit blocked).
+ *              The computer guards for decision 1 (as R1 held).
  * The hooks run on the game's thread; the menu and the picture (training_hud) on the window's.
  */
 #include <SDL3/SDL.h>
@@ -36,12 +44,23 @@
 #include "pad.h"
 
 #define REFILL_FRAMES 60      /* a second without being hit: life back to full */
+#define GUARD_FRAMES 30       /* block after first hit: held half a second after the opponent is out of it */
 #define COMBO_FRAMES 45       /* hits closer than this belong to one combo */
 #define HIST 14
 
-enum { OPT_ON, OPT_IDLE, OPT_LIFE, OPT_DAMAGE, OPT_INPUTS, OPT_MASH, OPT_REVIVAL, OPT_COUNTER, NOPT };
+/* in the order they are kept in the file (new ones at the end); shown in menu_order */
+enum { OPT_ON, OPT_IDLE, OPT_LIFE, OPT_DAMAGE, OPT_INPUTS, OPT_MASH, OPT_REVIVAL, OPT_COUNTER,
+       OPT_COSMO, OPT_TIME, OPT_BLOCK, NOPT };
 static const char *opt_name[NOPT] = {"Training mode", "Opponent (computer)", "Infinite life", "Show damage", "Show inputs",
-                                     "Auto-mash (Big Bang)", "Revival (Athena)", "Big Bang Counter"};
+                                     "Auto-mash (Big Bang)", "Revival (Athena)", "Big Bang Counter",
+                                     "Cosmo always full", "Infinite time", "Block"};
+static const int menu_order[NOPT] = {OPT_ON, OPT_IDLE, OPT_BLOCK, OPT_LIFE, OPT_COSMO, OPT_TIME, OPT_DAMAGE, OPT_INPUTS,
+                                     OPT_MASH, OPT_REVIVAL, OPT_COUNTER};
+static int is_training_opt(int i) { return i < OPT_MASH || i >= OPT_COSMO; }   /* SSTHEH_TRAINING's */
+/* "Block" (the idle opponent) has more values than on and off */
+enum { BLOCK_OFF, BLOCK_AFTER_HIT, BLOCK_ALWAYS, NBLOCK };
+static const char *block_name[NBLOCK] = {"off", "after first hit", "always"};
+static int opt_values(int i) { return i == OPT_BLOCK ? NBLOCK : 2; }
 static volatile int opt[NOPT];
 static volatile int session = -1;           /* training: -1 the F5 menu's choice, 1 chosen in the mode menu */
 static int training_on(void) { return session >= 0 ? session : opt[OPT_ON]; }
@@ -82,7 +101,7 @@ static void save(void) {
     display_config_path(path, sizeof path, "training");
     FILE *f = fopen(path, "w");
     if (!f) return;
-    for (int i = 0; i < NOPT; i++) fputc('0' + !!opt[i], f);
+    for (int i = 0; i < NOPT; i++) fputc('0' + opt[i], f);
     fputc('\n', f);
     fclose(f);
 }
@@ -91,18 +110,19 @@ static void init(void) {
     static int done;
     if (done) return;
     done = 1;
-    opt[OPT_IDLE] = opt[OPT_LIFE] = opt[OPT_DAMAGE] = opt[OPT_INPUTS] = 1;   /* once training is turned on */
+    opt[OPT_IDLE] = opt[OPT_LIFE] = opt[OPT_DAMAGE] = opt[OPT_INPUTS] = opt[OPT_TIME] = 1;   /* once training is turned on */
     opt[OPT_REVIVAL] = opt[OPT_COUNTER] = 1;                                  /* as the game */
     const char *e = getenv("SSTHEH_TRAINING");
     if (e) {
-        for (int i = 0; i < OPT_MASH; i++) opt[i] = atoi(e) != 0;
+        for (int i = 0; i < NOPT; i++)
+            if (is_training_opt(i)) opt[i] = atoi(e) != 0;
     } else {
         char path[1100], buf[16] = "";
         display_config_path(path, sizeof path, "training");
         FILE *f = fopen(path, "r");
         if (f) {
             if (fgets(buf, sizeof buf, f))
-                for (int i = 0; i < NOPT && (buf[i] == '0' || buf[i] == '1'); i++) opt[i] = buf[i] == '1';
+                for (int i = 0; i < NOPT && buf[i] >= '0' && buf[i] - '0' < opt_values(i); i++) opt[i] = buf[i] - '0';
             fclose(f);
         }
     }
@@ -129,9 +149,10 @@ int training_automash(void) {
     return opt[OPT_MASH];
 }
 
-static void toggle(int i) {
+/* the next value (dir 1) or the one before (-1) */
+static void toggle(int i, int dir) {
     if (i == OPT_ON && session >= 0) { opt[i] = !session; session = -1; }   /* from what is on now */
-    else opt[i] = !opt[i];
+    else opt[i] = (opt[i] + opt_values(i) + dir) % opt_values(i);
     if (!getenv("SSTHEH_TRAINING")) save();
 }
 
@@ -146,6 +167,28 @@ static void settle(Ctx *c, Side *s) {
     s->combo += d;
     s->hits++;
     s->last_hit = frame_no;
+}
+
+/* Infinite time: the round's time limit (battle +0x34E) made 0, the game's own "no limit": the step
+ * keeps the timer at 0 without ending the round, the time-over checks (0x002F5CA0...) answer no and
+ * the HUD shows infinity. The limit is put back, with a full timer, when the option is turned off. */
+static void infinite_time(Ctx *c) {
+    static u32 for_battle;                  /* the battle whose limit was taken away */
+    static u16 limit;
+    int on = training_on() && opt[OPT_TIME];
+    if (for_battle != battle) { for_battle = 0; limit = 0; }
+    if (on) {
+        u16 l = rd16(c, battle + BATTLE_TIME_LIMIT);
+        if (!l) return;
+        for_battle = battle;
+        limit = l;
+        wr16(c, battle + BATTLE_TIME_LIMIT, 0);
+    } else if (for_battle && limit) {
+        wr16(c, battle + BATTLE_TIME_LIMIT, limit);
+        wr_float(c, battle + BATTLE_TIMER, (float)limit);
+        for_battle = 0;
+        limit = 0;
+    }
 }
 
 /* 0x002F9140 (before): the battle's step, once a game frame */
@@ -167,7 +210,14 @@ void hle_training_battle(Ctx *c) {
         settle(c, s);
         int refill = training_on() && opt[OPT_LIFE] && frame_no - s->last_hit >= REFILL_FRAMES;
         if (refill && rd_float(c, s->block) < 100.0f) wr_float(c, s->block, 100.0f);
+        /* cosmo always full: the gauge and its three bars, except while it burns (then it runs down
+           as in the game, and is full again once it is over) */
+        if (training_on() && opt[OPT_COSMO] && !rd8(c, s->block + LIFE_COSMO_BURNING)) {
+            wr_float(c, s->block + LIFE_COSMO, COSMO_FULL);
+            wr16(c, s->block + LIFE_COSMO_BARS, 3);
+        }
     }
+    infinite_time(c);
     /* the first player's inputs */
     u16 b = pad_buttons[0];
     if (nhist && hist[0].buttons == b) { if (hist[0].frames < 999) hist[0].frames++; }
@@ -201,13 +251,48 @@ void hle_training_damage(Ctx *c) {
     }
 }
 
-/* 0x002FF490 (before): a controller's common step; the computer's decision cleared */
+/* Block, for the idle opponent: whether it holds guard now (guard takes over whenever it is free to
+ * move: out of a hit, a move that isn't a combo is blocked). Per computer controller (two in COM VS COM).
+ *   after first hit: once it is hit it guards, and lets go half a second after it last was out of a hit
+ *                    or a block, back to idle;
+ *   always:          guards all the time. */
+static int block_now(Ctx *c, u32 ctl) {
+    static struct { u32 ctl, fighter, until, seen; int on; } g[2];
+    int k = g[0].ctl == ctl ? 0 : g[1].ctl == ctl ? 1 : !g[0].ctl ? 0 : 1;
+    u32 fighter = rd32(c, ctl + CTL_FIGHTER);
+    if (g[k].ctl != ctl || g[k].fighter != fighter || frame_no - g[k].seen > 2) {  /* new, or back after training off */
+        memset(&g[k], 0, sizeof g[k]);
+        g[k].ctl = ctl;
+        g[k].fighter = fighter;
+    }
+    g[k].seen = frame_no;
+    if (!opt[OPT_BLOCK] || !fighter) return g[k].on = 0;
+    if (opt[OPT_BLOCK] == BLOCK_ALWAYS) return 1;
+    u32 st = rd32(c, fighter + FIGHTER_STATE);
+    if (st == FS_GUARD_HIT) g[k].until = frame_no + GUARD_FRAMES;  /* a block: half a second more from its end */
+    else if (st != FS_STAND && st != FS_GUARD && st != FS_COSMO_BURN) { g[k].on = 1; g[k].until = 0; }   /* hit */
+    else if (g[k].on && !g[k].until) g[k].until = frame_no + GUARD_FRAMES;                 /* out of the hit */
+    else if (g[k].on && (s32)(frame_no - g[k].until) >= 0) g[k].on = 0;
+    return g[k].on;
+}
+
+/* 0x002FF490 (before): a controller's common step; the computer's decision cleared (or guard) */
 void hle_training_controller(Ctx *c) {
     if (!training_on() || !opt[OPT_IDLE]) return;
     u32 ctl = RW(4);
     if (rd32(c, ctl + CTL_VTABLE) != VT_COM_CTL) return;
-    wr16(c, ctl + COM_DECISION, 0);
+    wr16(c, ctl + COM_DECISION, block_now(c, ctl) ? COM_GUARD : 0);
     for (u32 i = 0; i < 3; i++) wr8(c, ctl + COM_DECISION_ARGS + i, 0);
+}
+
+/* 0x00315310 (replaced): the computer controller's "Triangle + Circle?" (burn the cosmo), asked by the
+ * controllers' step (0x002FF190) when its fighter has the three bars: a draw of the computer's mind
+ * (0x003B4860, a0 = controller + 0x18; about 1 in 1750 when it is in the mood), not its decision,
+ * so the idle opponent burned its cosmo too. Never for an idle opponent. */
+void hle_com_burn(Ctx *c) {
+    if (training_on() && opt[OPT_IDLE]) { SET64(2, 0); return; }
+    SET32(4, RW(4) + COM_MIND);
+    SET64(2, game_call(c, FN_COM_BURN_DRAW));
 }
 
 /* ---- "Training" in the character select's mode menu (○ there: 1P VS 2P, 1P VS COM, COM VS 2P,
@@ -295,7 +380,8 @@ u16 training_pad(u16 b) {
     if (!menu_open) return b & ~swallow;
     if (down & PAD_UP) menu_sel = (menu_sel + NOPT - 1) % NOPT;
     if (down & PAD_DOWN) menu_sel = (menu_sel + 1) % NOPT;
-    if (down & (PAD_LEFT | PAD_RIGHT | PAD_CROSS)) toggle(menu_sel);
+    if (down & (PAD_RIGHT | PAD_CROSS)) toggle(menu_order[menu_sel], 1);
+    else if (down & PAD_LEFT) toggle(menu_order[menu_sel], -1);
     if (down & PAD_CIRCLE) menu_open = 0;
     swallow = b;
     return 0;
@@ -365,16 +451,16 @@ int training_hud(SDL_Surface *surf) {
         }
     }
     if (menu_open) {
-        float w = 40 * 8, h = (NOPT + 4) * 12, x = (W - w) / 2, y = (H - h) / 2;
+        float w = 44 * 8, h = (NOPT + 4) * 12, x = (W - w) / 2, y = (H - h) / 2;
         box(r, x - 8, y - 8, w + 16, h + 16);
         SDL_SetRenderDrawColor(r, 255, 220, 0, 255);
         SDL_RenderDebugText(r, x, y, "TRAINING AND OPTIONS");
-        for (int i = 0; i < NOPT; i++) {
-            int on = i == OPT_ON ? training_on() : opt[i];
-            const char *v = i == OPT_IDLE ? (on ? "idle" : "plays") : on ? "on" : "off";
-            snprintf(line, sizeof line, "%c %-22s %s", i == menu_sel ? '>' : ' ', opt_name[i], v);
-            SDL_SetRenderDrawColor(r, 255, 255, 255, i == menu_sel ? 255 : 170);
-            SDL_RenderDebugText(r, x, y + 18 + (float)i * 12, line);
+        for (int k = 0; k < NOPT; k++) {
+            int i = menu_order[k], on = i == OPT_ON ? training_on() : opt[i];
+            const char *v = i == OPT_IDLE ? (on ? "idle" : "plays") : i == OPT_BLOCK ? block_name[on] : on ? "on" : "off";
+            snprintf(line, sizeof line, "%c %-26s %s", k == menu_sel ? '>' : ' ', opt_name[i], v);
+            SDL_SetRenderDrawColor(r, 255, 255, 255, k == menu_sel ? 255 : 170);
+            SDL_RenderDebugText(r, x, y + 18 + (float)k * 12, line);
         }
         SDL_SetRenderDrawColor(r, 160, 160, 160, 255);
         SDL_RenderDebugText(r, x, y + 18 + NOPT * 12 + 6, "Cross: change  Circle: close");

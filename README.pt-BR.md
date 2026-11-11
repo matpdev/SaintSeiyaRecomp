@@ -35,7 +35,7 @@ controle e memory card.
 | Som | música e vozes (CRI ADX) e **efeitos sonoros** (golpes, passos, menus: o driver SSD/RSSD do disco, interpretado, tocando num SPU2 emulado), com o reverb do SPU2 |
 | Vídeo | o vídeo de abertura (Sofdec), decodificado com FFmpeg |
 | Texto | os textos do jogo desenhados com um arquivo de fonte a 4x (M PLUS Rounded 1c, baixada para `fonts/` pelo `build.sh` / `tools/fetch_font.sh`), no layout e nas cores do próprio jogo |
-| Extras | um modo de treino que o original não tem (F5: oponente parado, vida infinita, dano e inputs na tela); um segundo controle joga como jogador 2 |
+| Extras | um modo de treino que o original não tem (F5: oponente parado, defesa (após o primeiro golpe, sempre), vida infinita, cosmo cheio, tempo infinito, dano e inputs na tela); um segundo controle joga como jogador 2 |
 | Decompilação | compilador identificado (Metrowerks CodeWarrior PS2 3.0.1, `-O3`, C++), 327 funções de biblioteca nomeadas; nenhuma função do jogo decompilada ainda |
 | Memory card | o slot 1 é uma pasta (`~/.local/share/sstheh/memcard1`): o jogo salva e carrega normalmente |
 | Falta | testes do começo ao fim; o build de Windows só foi testado com Wine até agora; o macOS ainda não tem release pronto (compile, abaixo) |
@@ -180,8 +180,15 @@ luta 1P VS COM com o modo de treino ligado (escolher outro modo ali volta à esc
 F5 (ou Select + Start) abre um menu por cima do jogo; ele é usado com o controle (↑/↓, ✕ muda, ○ fecha) e as
 escolhas ficam salvas. Com *Training mode* ligado, em toda luta:
 
-- *Opponent (computer)*: idle — um lutador jogado pelo computador fica parado (golpes já começados terminam); ou joga normalmente;
+- *Opponent (computer)*: idle — um lutador jogado pelo computador fica parado (golpes já começados terminam, e ele
+  nunca estoura o cosmo); ou joga normalmente;
+- *Block* (oponente parado, ←/→ escolhe): *after first hit* — o primeiro golpe entra, depois ele defende assim que
+  sai do golpe, então um golpe que não combe é bloqueado, e meio segundo depois do último golpe ou bloqueio ele volta a
+  ficar parado; *always* — defende sempre; *off*;
 - *Infinite life*: a vida volta ao máximo um segundo depois do último golpe, e nenhum golpe nocauteia;
+- *Cosmo always full*: as três barras de cosmo dos dois lutadores ficam cheias (estourar o cosmo, △ + ○, gasta como
+  sempre; elas enchem de novo quando acaba);
+- *Infinite time* (ligado por padrão): sem limite de tempo, o cronômetro mostra ∞;
 - *Show damage*: a vida de cada lutador, o dano do último golpe e o do combo (dano e golpes);
 - *Show inputs*: os comandos do jogador 1, o mais novo em cima (direção na notação do teclado numérico, 5 = neutro,
   6 = direita), com os quadros que cada um durou.

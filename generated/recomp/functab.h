@@ -16225,6 +16225,7 @@ void F_004C81F0(Ctx *c);
 void F_004C85C0(Ctx *c);
 void F_004C85E0(Ctx *c);
 void F_004C8680(Ctx *c);
+void hle_com_burn(Ctx *c);
 void hle_com_face(Ctx *c);
 void hle_cri_print(Ctx *c);
 void hle_csel_alloc(Ctx *c);
