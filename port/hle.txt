@@ -40,6 +40,7 @@
 0x002F9140 hle_training_battle before     # the battle's step (battle): training mode's frame, see port/hle/training.c
 0x0031E5F0 hle_training_damage before     # a hit's damage (life block, damage): its amount, no knock-out in training
 0x002FF490 hle_training_controller before # controllers' common step: the computer's decision cleared for an idle opponent
+0x00315310 hle_com_burn                 # computer controller: Triangle + Circle (burn the cosmo)? a draw; never for the idle opponent (port/hle/training.c)
 0x00100530 hle_csel_alloc before          # malloc: the character select's elements, more of them, see port/hle/charselect.c
 0x00102580 hle_csel_array before          # new[]: the same, constructed by the game
 0x00179D80 hle_csel_borders_init before   # character select: border pieces' set-up (the new ones too)
