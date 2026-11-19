@@ -28,6 +28,8 @@ typedef struct {
     u32 textured, tfx, tcc, fst;
     s32 tex;                    /* texture index (gpu_tex), -1: none; < -1: render target (-2 - fbp) */
     u32 tw, th;                 /* texture size */
+    u32 nx, ny, nw, nh;         /* the texture is a picture's replacement: the picture's corner and size in those
+                                   texels (texpack.c); nw 0: none */
     u32 filter, wrap_u, wrap_v; /* filter: 1 bilinear; wrap: 0 repeat, 1 clamp */
     float region[4];            /* region clamp in texels, region[0] < 0: none */
     u32 scissor[4];             /* x0, x1, y0, y1 inclusive */

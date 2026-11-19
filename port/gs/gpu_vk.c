@@ -373,7 +373,7 @@ static SDL_GPUGraphicsPipeline *pipe_for(const GpuDraw *d) {
 
 typedef struct {
     s32 mode[4], atest[4];
-    float texsize[4], region[4];
+    float texsize[4], region[4], picture[4];
 } DrawUniforms;
 
 static u64 up_bytes, up_count;
@@ -790,10 +790,12 @@ static void draw_bind(Replay *r, const GpuDraw *d, SDL_GPUTexture *tex, float ac
     int zw = d->zwrite, st;
     atest_masks(d, &wm, &zw, &st);
     float tw = (float)d->tw, th = (float)d->th, ntw = across, nth = d->tex < -1 && d->textured ? across : th;
+    if (d->nw) { ntw = (float)d->nw; nth = (float)d->nh; }
     DrawUniforms u = {{(s32)d->textured, (s32)d->tfx, (s32)d->tcc, (s32)d->fst},
                       {st, (s32)d->atest[1], (s32)d->atest[2], (s32)d->atest[3]},
                       {tw, th, 1.0f / ntw, 1.0f / nth},
-                      {d->region[0], d->region[1], d->region[2], d->region[3]}};
+                      {d->region[0], d->region[1], d->region[2], d->region[3]},
+                      {(float)d->nx, (float)d->ny, 0, 0}};
     if (!r->have_u || memcmp(&u, &r->u, sizeof u)) { SDL_PushGPUFragmentUniformData(r->cmd, 0, &u, sizeof u); r->u = u; r->have_u = 1; }
     int smp = (d->filter ? 1 : 0) | (d->wrap_u ? 2 : 0) | (d->wrap_v ? 4 : 0);
     if (d->tex < -1) smp |= 6;

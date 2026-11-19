@@ -647,7 +647,15 @@ void gpu_release_frame(GpuFrame *f) {
  * gs.c owns the textures' lifetime: entries are indices 1..GPU_MAX_TEX-1 (the GPU texture slot),
  * the least recently used go when there are too many bytes or no free entry, and the frame tells
  * the GPU side which to release. */
-typedef struct { u64 ckey[3]; u32 w, h, last, used, plain; } TexEnt;   /* plain: of about one colour */
+/* plain: of about one colour. pics: the disc pictures found in it (texpack.c), each at x, y, w x h
+   texels (malloc'd); hd_of: this entry holds that picture's replacement (shared by the entries
+   showing the picture) */
+typedef struct { u64 pic; u16 x, y, w, h; } TexPic;
+typedef struct { u32 bp, bw, psm, x, y, w, h; } UpRect;
+#define MAX_UPRECTS 1024
+static UpRect uprects[MAX_UPRECTS];             /* image uploads (upload_note) */
+static u32 nuprects;
+typedef struct { u64 ckey[3]; u32 w, h, last, used, plain, npics; TexPic *pics; u64 hd_of; } TexEnt;
 static TexEnt tex_ents[GPU_MAX_TEX];
 static u32 tex_free[GPU_MAX_TEX], ntex_free, tex_inited;
 static u64 tex_bytes;
@@ -715,6 +723,9 @@ static void footprint(u32 bp, u32 bw, u32 psm, u32 tw, u32 th, u32 *first, u32 *
 
 static void tex_release(u32 i) {
     tex_ents[i].used = 0;
+    free(tex_ents[i].pics);
+    tex_ents[i].pics = NULL;
+    tex_ents[i].npics = 0;
     tex_bytes -= (u64)tex_ents[i].w * tex_ents[i].h * 4;
     tex_free[ntex_free++] = i;
     GROW(rec->frees, rec->nfrees, rec->cap_frees, u32);
@@ -745,6 +756,93 @@ static void transfer_flush(void);
 u64 texpack_name(const u32 *px, u32 w, u32 h);                 /* texpack.c */
 void texpack_dump(u64 name, const u32 *px, u32 w, u32 h);
 u32 *texpack_find(u64 name, u32 *w, u32 *h);
+u64 texpack_identify(const u32 *px, u32 tw, u32 th, u32 *pw, u32 *ph);
+u64 texpack_rect_name(const u32 *px, u32 stride, u32 x, u32 y, u32 w, u32 h);
+int texpack_known(u64 pic);
+int texpack_pictures_on(void);
+void texpack_dump_picture(u64 pic, const u32 *px, u32 stride, u32 x, u32 y, u32 w, u32 h);
+int texpack_has_hd(u64 pic);
+u32 *texpack_load_hd(u64 pic, u32 *w, u32 *h);
+
+/* The entry holding a picture's replacement (texpack.c's hd/), loaded and queued for upload the first
+   time or after it was dropped; 0 when there is none. */
+static u32 hd_entry(u64 pic, u32 plain) {
+    static struct { u64 pic; u32 idx, failed; } map[4096];
+    u32 i = (u32)(pic >> 52);
+    for (u32 n = 0; n < 4096 && map[i].pic && map[i].pic != pic; n++) i = (i + 1) & 4095;
+    if (map[i].pic == pic) {
+        if (map[i].failed) return 0;
+        u32 k = map[i].idx;
+        if (tex_ents[k].used && tex_ents[k].hd_of == pic) return k;
+    }
+    if (map[i].pic && map[i].pic != pic) return 0;           /* full */
+    map[i].pic = pic;
+    map[i].failed = 1;
+    u32 w, h, *px = texpack_load_hd(pic, &w, &h);
+    if (!px) return 0;
+    u32 k = tex_alloc(w, h);
+    if (!k) { free(px); map[i].pic = 0; return 0; }
+    tex_ents[k].ckey[0] = ~0ull;                             /* never found by content */
+    tex_ents[k].hd_of = pic;
+    tex_ents[k].plain = plain;
+    GROW(rec->uploads, rec->nuploads, rec->cap_uploads, GpuTexUpload);
+    rec->uploads[rec->nuploads++] = (GpuTexUpload){k, w, h, px, 0, 0, 0, 0, 0};
+    map[i].idx = k;
+    map[i].failed = 0;
+    return k;
+}
+
+/* SSTHEH_HD_LOG=1: one line per picture and outcome the first time a draw meets it */
+static void hd_note(u64 pic, const char *what, const GpuDraw *d, float u0, float u1, float v0, float v1) {
+    static int on = -1;
+    if (on < 0) on = getenv("SSTHEH_HD_LOG") != NULL;
+    if (!on) return;
+    static u64 seen[8192];
+    u64 key = pic ^ (u64)(uintptr_t)what;
+    u32 i = (u32)(key >> 51);
+    for (u32 n = 0; n < 8192 && seen[i]; n++, i = (i + 1) & 8191)
+        if (seen[i] == key) return;
+    seen[i] = key;
+    rt_log("hd", "%016llx %s: tex %ux%u fst %u uv %.1f..%.1f x %.1f..%.1f", (unsigned long long)pic, what, d->tw, d->th,
+           d->fst, u0, u1, v0, v1);
+}
+
+/* A draw of a texture showing disc pictures, all inside one of them: sampled from that picture's
+   replacement (its texels counted from the picture's corner, in the picture's size: nx, ny, nw x nh).
+   An axis the picture covers whole (a tile that repeats) needs no check. */
+static void hd_redirect(GpuDraw *d) {
+    TexEnt *e = &tex_ents[d->tex];
+    float u0 = 1e9f, u1 = -1e9f, v0 = 1e9f, v1 = -1e9f;
+    for (u32 i = d->first; i < d->first + d->count; i++) {
+        const GpuVertex *o = &rec->verts[i];
+        float u = o->s, v = o->t;
+        if (!d->fst) { u = u / o->q * (float)d->tw; v = v / o->q * (float)d->th; }
+        if (u < u0) u0 = u;
+        if (u > u1) u1 = u;
+        if (v < v0) v0 = v;
+        if (v > v1) v1 = v;
+    }
+    for (u32 n = 0; n < e->npics; n++) {
+        const TexPic *p = &e->pics[n];
+        int whole_u = p->x == 0 && p->w == d->tw, whole_v = p->y == 0 && p->h == d->th;
+        int in_u = whole_u || (u0 >= p->x - 0.5f && u1 <= p->x + p->w + 0.5f);
+        int in_v = whole_v || (v0 >= p->y - 0.5f && v1 <= p->y + p->h + 0.5f);
+        if (!in_u || !in_v || !texpack_has_hd(p->pic)) continue;
+        u32 k = hd_entry(p->pic, e->plain);
+        hd_note(p->pic, k ? "replaced" : "no replacement loaded", d, u0, u1, v0, v1);
+        if (!k) return;
+        tex_ents[k].last = rec_frame;
+        d->tex = (s32)k;
+        d->nx = p->x;
+        d->ny = p->y;
+        d->nw = p->w;
+        d->nh = p->h;
+        if (!whole_u) d->wrap_u = 1;            /* a part of the texture: its edges are the picture's */
+        if (!whole_v) d->wrap_v = 1;
+        return;
+    }
+    for (u32 n = 0; n < e->npics; n++) hd_note(e->pics[n].pic, "outside", d, u0, u1, v0, v1);
+}
 
 /* An 8-bit texture's palette of 256 (its order in the CLUT buffer: CSM1's swizzle) */
 static void palette8(u32 *pal, u32 cbp, u32 cpsm) {
@@ -840,13 +938,13 @@ static void tex_decode(u32 *px, u32 tbp, u32 tbw, u32 psm, u32 tw, u32 th, u32 c
  * size, for a paletted one the hash of its indices alone and of its palette alone (palette variants of
  * one picture share the first), and whether it is flat or a text the font file redraws. */
 static void tex_log(u64 name, const u32 *px, u32 tbp, u32 tbw, u32 psm, u32 tw, u32 th, u32 cbp, u32 cpsm, u32 csa,
-                    int plain, int text) {
+                    int plain, int text, const TexEnt *e) {
     static FILE *f;
     static int tried;
     if (!tried) {
         tried = 1;
         const char *e = getenv("SSTHEH_TEX_LOG");
-        if (e && *e && (f = fopen(e, "w"))) fputs("name,psm,w,h,indices,palette,plain,text\n", f);
+        if (e && *e && (f = fopen(e, "w"))) fputs("name,psm,w,h,indices,palette,plain,text,pics,pic,px,py,pw,ph,tbp,tbw\n", f);
     }
     if (!f) return;
     u64 ih = name, ph = 0;
@@ -863,9 +961,83 @@ static void tex_log(u64 name, const u32 *px, u32 tbp, u32 tbw, u32 psm, u32 tw, 
         for (u32 i = 0; i < 256; i++) if (used[i]) ph = (ph ^ pal[i] ^ (u64)i << 32) * 0x100000001B3ull;
         free(ix);
     }
-    fprintf(f, "%016llx,%02x,%u,%u,%016llx,%016llx,%d,%d\n", (unsigned long long)name, psm, tw, th,
-            (unsigned long long)ih, (unsigned long long)ph, plain, text);
+    TexPic p0 = e->npics ? e->pics[0] : (TexPic){0, 0, 0, 0, 0};
+    fprintf(f, "%016llx,%02x,%u,%u,%016llx,%016llx,%d,%d,%u,%016llx,%u,%u,%u,%u,%x,%u\n", (unsigned long long)name, psm,
+            tw, th, (unsigned long long)ih, (unsigned long long)ph, plain, text, e->npics, (unsigned long long)p0.pic,
+            p0.x, p0.y, p0.w, p0.h, tbp, tbw);
     fflush(f);
+}
+
+/* The disc pictures in a texture just decoded (texpack.c): where an upload went inside it, and at its
+   top left (a picture uploaded long ago, or by a copy). An upload into the same buffer width and
+   format, at the texture's base or whole pages after it, is at a known place in the texture. */
+static void find_pictures(TexEnt *e, const u32 *px, u32 tbp, u32 tbw, u32 psm, u32 tw, u32 th) {
+    if (!texpack_pictures_on()) return;
+    u32 pgw = 64, pgh = 32, cap = 0;            /* page size of the format, in texels */
+    switch (psm) {
+    case 0x13: pgw = 128; pgh = 64; break;
+    case 0x14: pgw = 128; pgh = 128; break;
+    case 0x02: case 0x0A: pgw = 64; pgh = 64; break;
+    }
+    u32 ppr = (tbw ? tbw : 1) * 64 / pgw;       /* pages per row of the buffer */
+    if (!ppr) ppr = 1;
+    for (u32 i = nuprects; i-- > 0;) {
+        const UpRect *u = &uprects[i];
+        if (u->psm != psm || u->bw != tbw || u->bp < tbp) continue;
+        u32 ox = 0, oy = 0;
+        if (u->bp != tbp) {
+            if ((u->bp - tbp) & 31) continue;
+            u32 pg = (u->bp - tbp) >> 5;
+            ox = (pg % ppr) * pgw;
+            oy = (pg / ppr) * pgh;
+        }
+        u32 x = ox + u->x, y = oy + u->y;
+        if (x + u->w > tw || y + u->h > th) continue;
+        int dup = 0;
+        for (u32 k = 0; k < e->npics; k++)
+            if (e->pics[k].x == x && e->pics[k].y == y && e->pics[k].w == u->w && e->pics[k].h == u->h) dup = 1;
+        if (dup) continue;
+        u64 name = texpack_rect_name(px, tw, x, y, u->w, u->h);
+        if (!texpack_known(name)) {                 /* not a disc picture (compressed on the disc) */
+            texpack_dump_picture(name, px, tw, x, y, u->w, u->h);
+            if (!texpack_has_hd(name)) continue;
+        }
+        if (e->npics == cap) e->pics = realloc(e->pics, (cap = cap ? cap * 2 : 4) * sizeof *e->pics);
+        e->pics[e->npics++] = (TexPic){name, (u16)x, (u16)y, (u16)u->w, (u16)u->h};
+    }
+    /* pictures sent as raw 32-bit blocks the buffer's width wide (the story's layers: 64 x 1024 at
+       width 1, already laid out to be read as 8-bit): when such uploads cover every page the
+       texture reads, it holds no garbage and is a picture as a whole */
+    if (!e->npics) {
+        u32 first, n, whole = 1;
+        footprint(tbp, tbw, psm, tw, th, &first, &n);
+        for (u32 pg = first; pg < first + n && whole; pg++) {
+            int covered = 0;
+            for (u32 i = 0; i < nuprects && !covered; i++) {
+                const UpRect *u = &uprects[i];
+                if (u->psm != 0x00 || u->x || u->y || (u->bp & 31) || u->w != (u->bw ? u->bw : 1) * 64) continue;
+                u32 ufirst = u->bp >> 5, un = (u->h + 31) / 32 * (u->bw ? u->bw : 1);
+                covered = pg >= ufirst && pg < ufirst + un;
+            }
+            whole = covered;
+        }
+        if (whole && (tbp & 31) == 0) {
+            u64 name = texpack_rect_name(px, tw, 0, 0, tw, th);
+            if (!texpack_known(name)) texpack_dump_picture(name, px, tw, 0, 0, tw, th);
+            if (texpack_known(name) || texpack_has_hd(name)) {
+                e->pics = malloc(sizeof *e->pics);
+                e->pics[e->npics++] = (TexPic){name, 0, 0, (u16)tw, (u16)th};
+            }
+        }
+    }
+    if (!e->npics) {
+        u32 pw, ph;
+        u64 name = texpack_identify(px, tw, th, &pw, &ph);
+        if (name) {
+            e->pics = malloc(sizeof *e->pics);
+            e->pics[e->npics++] = (TexPic){name, 0, 0, (u16)pw, (u16)ph};
+        }
+    }
 }
 
 /* A texture not seen with this content (ckey): decoded from the GS memory into a new entry, or
@@ -891,13 +1063,14 @@ static u32 texture_new(const u64 ckey[3], u32 tbp, u32 tbw, u32 psm, u32 tw, u32
         font = rp != NULL;
         free(ix);
     }
+    if (!rp) find_pictures(&tex_ents[idx], px, tbp, tbw, psm, tw, th);
     tex_ents[idx].plain = 1;                 /* every texel within a few levels of the first */
     for (u32 i = 1; i < tw * th && tex_ents[idx].plain; i++)
         for (int sh = 0; sh < 32; sh += 8) {
             int d = (int)((px[i] >> sh) & 0xFF) - (int)((px[0] >> sh) & 0xFF);
             if (d > 8 || d < -8) { tex_ents[idx].plain = 0; break; }
         }
-    tex_log(name, px, tbp, tbw, psm, tw, th, cbp, cpsm, csa, tex_ents[idx].plain, font);
+    tex_log(name, px, tbp, tbw, psm, tw, th, cbp, cpsm, csa, tex_ents[idx].plain, font, &tex_ents[idx]);
     if (rp) {
         free(px);
         px = rp;
@@ -1109,6 +1282,7 @@ static void record(int ctx, int type, const Vertex *v) {
     u32 zs = d->zpsm == 0 ? 32 : d->zpsm == 1 ? 24 : 16;
     put_prim(type, v, zs, (gs.prim >> 3) & 1, d->fst);
     d->count = rec->nverts - d->first;
+    if (d->tex > 0 && tex_ents[d->tex].npics) hd_redirect(d);
     classify(d, type, d->first);
     /* the same state as the draw before, its vertices right after: one draw (the GPU keeps their
        order); not one reading a render target, which may need a copy of it before each draw */
@@ -1161,6 +1335,26 @@ static void local_to_local(void) {
 
 static void transfer_flush(void);
 
+/* Image uploads, for finding the disc pictures in the textures decoded (texpack.c): the game
+   uploads each picture whole, so the rectangles uploaded are where pictures may be. The latest
+   ones; an upload drops the older ones it touches in the same buffer (no longer whole). Palettes (16 x 16 and 8 x 2
+   of 32 bits) are not pictures. */
+static void upload_note(void) {
+    u32 dbp = (gs.bitbltbuf >> 32) & 0x3FFF, dbw = (gs.bitbltbuf >> 48) & 0x3F, dpsm = (gs.bitbltbuf >> 56) & 0x3F;
+    if (!texpack_pictures_on() || gs.tw * gs.th < 64 || gs.tw > 1024 || gs.th > 1024) return;
+    if (dpsm == 0x00 && ((gs.tw == 16 && gs.th == 16) || (gs.tw == 8 && gs.th == 2))) return;
+    u32 n = 0;
+    for (u32 i = 0; i < nuprects; i++) {
+        UpRect *o = &uprects[i];
+        int same = o->bp == dbp && o->bw == dbw && o->psm == dpsm;
+        if (same && o->x < gs.tx + gs.tw && gs.tx < o->x + o->w && o->y < gs.ty + gs.th && gs.ty < o->y + o->h) continue;
+        uprects[n++] = *o;
+    }
+    nuprects = n;
+    if (nuprects == MAX_UPRECTS) memmove(uprects, uprects + 1, --nuprects * sizeof *uprects);
+    uprects[nuprects++] = (UpRect){dbp, dbw, dpsm, gs.tx, gs.ty, gs.tw, gs.th};
+}
+
 static void transfer_begin(void) {
     transfer_flush();                                   /* an upload left incomplete */
     u32 dir = gs.trxdir & 3;
@@ -1170,6 +1364,7 @@ static void transfer_begin(void) {
     gs.tw = gs.trxreg & 0xFFF;
     gs.th = (gs.trxreg >> 32) & 0xFFF;
     gs.tpos = 0;
+    if (dir == 0) upload_note();
     if (dir == 2) local_to_local();
 }
 

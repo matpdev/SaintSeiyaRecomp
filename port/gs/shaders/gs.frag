@@ -11,6 +11,7 @@ layout(set = 3, binding = 0) uniform Draw {
     ivec4 atest;       // x: enabled, y: method (0 never .. 7 notequal), z: reference 0..255, w: fail mode
     vec4 texsize;      // texture width, height, 1/width, 1/height
     vec4 region;       // region clamp in texels: min u, min v, max u, max v (all < 0: none)
+    vec4 picture;      // xy: a replacement picture's corner in texels (texsize.zw: 1 / its size)
 };
 
 void main() {
@@ -20,7 +21,7 @@ void main() {
     if (mode.x != 0) {
         vec2 uv = mode.w != 0 ? v_tex.xy : v_tex.xy / v_tex.z * texsize.xy;     // texels
         if (region.x >= 0.0) uv = clamp(uv, region.xy, region.zw + 0.999);
-        vec4 tc = texture(tex, uv * texsize.zw) * 255.0;
+        vec4 tc = texture(tex, (uv - picture.xy) * texsize.zw) * 255.0;
         vec3 rgb;
         if (mode.y == 0) rgb = tc.rgb * vc.rgb / 128.0;
         else if (mode.y == 1) rgb = tc.rgb;
