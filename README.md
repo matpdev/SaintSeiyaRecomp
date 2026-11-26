@@ -217,9 +217,9 @@ vertical blanks, no window). Environment variables:
 | `SSTHEH_WIDE_HUD=0` | in widescreen, the fight HUD (life bars, portraits, cosmo gauges) in the middle 4:3 instead of at the edges |
 | `SSTHEH_SHOT_PRESENT=WxH` | `--shot` saves the picture as a window that size shows it (widescreen, sides) instead of the PS2 frame |
 | `SSTHEH_FONT=file` / `=0` | the font the texts are drawn with (default: the first .ttf/.otf in `~/.local/share/sstheh/fonts/`, else `fonts/`) / the disc's font |
-| `SSTHEH_TEX_DUMP=1` | save every texture the game uses as PNG in `~/.local/share/sstheh/textures/dump/` (or `dump/` in the `SSTHEH_TEXTURES` folder) |
+| `SSTHEH_TEX_DUMP=1` | save every texture the game uses as PNG in `~/.local/share/sstheh/textures/dump/` (or `dump/` in the `SSTHEH_TEXTURES` folder), plus unindexed disc pictures in `dump/index.txt` |
 | `SSTHEH_RAM_DUMP=1` | `--shot` also saves the EE's 32 MB as `build/ram_N.bin` (for finding the game's variables) |
-| `SSTHEH_TEXTURES=0` | don't use replacement textures (`~/.local/share/sstheh/textures/<name>.png`, any size; `tools/upscale_textures.sh` makes an HD pack with Real-ESRGAN) |
+| `SSTHEH_TEXTURES=0` | don't use replacement textures (`~/.local/share/sstheh/textures/hd/<name>.png` keyed by `index.txt` from `tools/tex_extract.py`, or `<name>.png` by decoded texture; `tools/upscale_textures.sh` makes an HD pack with Real-ESRGAN) |
 | `SSTHEH_SCALE=n` | fixed render scale (1 to 8; default: follows the window size — 4 at 1080p, 5 at 4K) |
 | `SSTHEH_INTERP=0` | no interpolated frames (only the game's own) |
 | `SSTHEH_50HZ=1` | original PAL mode (50 Hz) |

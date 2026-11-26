@@ -217,9 +217,9 @@ indicados, sem janela). Variáveis de ambiente:
 | `SSTHEH_WIDE_HUD=0` | no widescreen, o HUD da luta (barras de vida, retratos, medidores de cosmo) no 4:3 do meio em vez de nas bordas |
 | `SSTHEH_SHOT_PRESENT=LxA` | o `--shot` salva a imagem como uma janela desse tamanho mostra (widescreen, laterais) em vez do quadro do PS2 |
 | `SSTHEH_FONT=arquivo` / `=0` | a fonte usada nos textos (padrão: o primeiro .ttf/.otf em `~/.local/share/sstheh/fonts/`, senão `fonts/`) / a fonte do disco |
-| `SSTHEH_TEX_DUMP=1` | salva cada textura que o jogo usa como PNG em `~/.local/share/sstheh/textures/dump/` (ou `dump/` na pasta de `SSTHEH_TEXTURES`) |
+| `SSTHEH_TEX_DUMP=1` | salva cada textura que o jogo usa como PNG em `~/.local/share/sstheh/textures/dump/` (ou `dump/` na pasta de `SSTHEH_TEXTURES`), além das imagens não indexadas em `dump/index.txt` |
 | `SSTHEH_RAM_DUMP=1` | o `--shot` também salva os 32 MB do EE em `build/ram_N.bin` (para achar variáveis do jogo) |
-| `SSTHEH_TEXTURES=0` | não usa texturas substitutas (`~/.local/share/sstheh/textures/<nome>.png`, de qualquer tamanho; `tools/upscale_textures.sh` gera um pacote HD com o Real-ESRGAN) |
+| `SSTHEH_TEXTURES=0` | não usa texturas substitutas (`~/.local/share/sstheh/textures/hd/<nome>.png` indexadas pelo `index.txt` do `tools/tex_extract.py`, ou `<nome>.png` por textura decodificada; `tools/upscale_textures.sh` gera um pacote HD com o Real-ESRGAN) |
 | `SSTHEH_SCALE=n` | escala de renderização fixa (1 a 8; padrão: acompanha o tamanho da janela — 4 em 1080p, 5 em 4K) |
 | `SSTHEH_INTERP=0` | sem quadros interpolados (mostra só os quadros do jogo) |
 | `SSTHEH_50HZ=1` | modo PAL original (50 Hz) |
