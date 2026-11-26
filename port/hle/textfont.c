@@ -41,7 +41,7 @@
 #define NGLYPH 1693
 #define TABLE0 D_CHARS0
 #define TABLE1 D_CHARS1
-#define MAXCANVAS 48
+#define MAXCANVAS 256
 #define MAXPLACED 512
 #define BASELINE 18.5f                  /* in a 22-pixel glyph box, from its top */
 #define CAP 17.0f                       /* height of a capital */
@@ -290,9 +290,18 @@ static int fits(const Canvas *cv, u32 tw, u32 th) {
     return 1;
 }
 
+static u32 canvas_h(const Canvas *cv) {
+    u32 mh = 0;
+    for (u32 i = 0; i < cv->n; i++) {
+        u32 y1 = cv->p[i].off / cv->stride + cv->p[i].h;
+        if (y1 > mh) mh = y1;
+    }
+    return mh;
+}
+
 /* the texels of the canvas's part of the texture match */
-static int same(const Canvas *cv, const u8 *e, const u8 *texels, u32 tw, u32 th) {
-    for (u32 y = 0; y < th; y++)
+static int same(const Canvas *cv, const u8 *e, const u8 *texels, u32 tw, u32 ch) {
+    for (u32 y = 0; y < ch; y++)
         if (memcmp(e + y * tw, texels + y * tw, cv->stride)) return 0;
     return 1;
 }
@@ -510,8 +519,8 @@ static u32 *draw(Canvas *cv, const u8 *texels, u32 tw, u32 th, const u32 *pal, u
 u32 *textfont_replace(const u8 *texels, u32 tw, u32 th, const u32 *pal, u32 *w_out, u32 *h_out, u32 *rect, u32 *fill) {
 #ifdef SSTHEH_FREETYPE
     if (!textfont_active() || !font_open()) return NULL;
-    u32 *out = NULL, strides[4], nstrides = 0;
-    u64 hashes[4];
+    u32 *out = NULL, nrh = 0;
+    struct { u32 stride, h; u64 hash; } rh[16];
     u8 *e = malloc((size_t)tw * th);
     pthread_mutex_lock(&lock);
     for (int k = 0; k < 2 * MAXCANVAS && !out; k++) {
@@ -519,30 +528,32 @@ u32 *textfont_replace(const u8 *texels, u32 tw, u32 th, const u32 *pal, u32 *w_o
         if (debug && cv->buf && cv->n) rt_log("font", "texture %ux%u vs canvas %08X stride %u, %u glyphs: %s", tw, th, cv->buf, cv->stride, cv->n,
                                               fits(cv, tw, th) ? "fits" : "doesn't fit");
         if (!fits(cv, tw, th)) continue;
-        u64 ek = glyphs_key(cv, tw, th);
+        u32 ch = canvas_h(cv);
+        u64 ek = glyphs_key(cv, tw, ch);
         if (cv->exp_key != ek) {
-            expected(cv, e, tw, th);
-            cv->exp_hash = region_hash(e, tw, th, cv->stride);
+            expected(cv, e, tw, ch);
+            cv->exp_hash = region_hash(e, tw, ch, cv->stride);
             cv->exp_key = ek;
         }
-        u32 sk = 0;                                             /* the texture's hash for this stride, once */
-        while (sk < nstrides && strides[sk] != cv->stride) sk++;
-        if (sk == nstrides) {
-            if (nstrides == 4) sk = 3;
-            else nstrides++;
-            strides[sk] = cv->stride;
-            hashes[sk] = region_hash(texels, tw, th, cv->stride);
+        u32 sk = 0;                                             /* the texture's hash for this (stride, ch), once */
+        while (sk < nrh && (rh[sk].stride != cv->stride || rh[sk].h != ch)) sk++;
+        if (sk == nrh) {
+            if (nrh == 16) sk = 15;
+            else nrh++;
+            rh[sk].stride = cv->stride;
+            rh[sk].h = ch;
+            rh[sk].hash = region_hash(texels, tw, ch, cv->stride);
         }
-        if (hashes[sk] != cv->exp_hash) continue;
+        if (rh[sk].hash != cv->exp_hash) continue;
         if (debug) {
-            expected(cv, e, tw, th);
+            expected(cv, e, tw, ch);
             u32 diff = 0;
-            for (u32 y = 0; y < th; y++)
+            for (u32 y = 0; y < ch; y++)
                 for (u32 x = 0; x < cv->stride; x++) diff += e[y * tw + x] != texels[y * tw + x];
             rt_log("font", "  %u texels differ", diff);
         }
-        expected(cv, e, tw, th);                                /* (a hash isn't proof) */
-        if (!same(cv, e, texels, tw, th)) continue;
+        expected(cv, e, tw, ch);                                /* (a hash isn't proof) */
+        if (!same(cv, e, texels, tw, ch)) continue;
         if (debug)
             for (int r = 0; r < 2; r++)
                 rt_log("font", "palette row %d: %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X", r,
@@ -551,6 +562,7 @@ u32 *textfont_replace(const u8 *texels, u32 tw, u32 th, const u32 *pal, u32 *w_o
         struct timespec t0, t1;
         clock_gettime(CLOCK_MONOTONIC, &t0);
         out = draw(cv, texels, tw, th, pal, rect, fill);
+        if (out && k < MAXCANVAS) cv->stamp = ++stamp;
         clock_gettime(CLOCK_MONOTONIC, &t1);
         if (debug) rt_log("font", "text of %u glyphs drawn (%ux%u) in %.1f ms", cv->n, tw * SCALE, th * SCALE,
                           (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6);
