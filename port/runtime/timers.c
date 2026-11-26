@@ -28,9 +28,11 @@ static double rate(u32 mode) {
     }
 }
 
+int kernel_speed(void);
+
 static u32 count_now(Timer *t) {
     if (!(t->mode & 0x80)) return t->count & 0xFFFF;
-    double ticks = (double)(now_ns() - t->since_ns) * rate(t->mode) / 1e9;
+    double ticks = (double)(now_ns() - t->since_ns) * rate(t->mode) * kernel_speed() / 1e9;
     return (u32)(t->count + (u64)ticks) & 0xFFFF;
 }
 

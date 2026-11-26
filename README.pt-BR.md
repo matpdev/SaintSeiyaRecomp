@@ -168,6 +168,7 @@ de onde é aberto, senão ao lado do executável (ou uma pasta acima).
 | F3 | painel de desempenho (fps da lógica e da tela, uso de CPU) |
 | F4 | liga/desliga o vsync |
 | F5 | menu de treino (também Select + Start num gamepad): veja abaixo |
+| F6 | avanço rápido (*fast-forward*): alterna entre 1×, 2× e 4× (silencia o áudio enquanto acelerado) |
 
 Controles de jogo (gamepad) são reconhecidos ao serem conectados: o primeiro joga junto com o teclado como jogador 1, o
 segundo como jogador 2 (modos de dois jogadores, ex. 1P vs 2P na Guerra dos Mil Dias).
@@ -223,6 +224,7 @@ indicados, sem janela). Variáveis de ambiente:
 | `SSTHEH_SCALE=n` | escala de renderização fixa (1 a 8; padrão: acompanha o tamanho da janela — 4 em 1080p, 5 em 4K) |
 | `SSTHEH_INTERP=0` | sem quadros interpolados (mostra só os quadros do jogo) |
 | `SSTHEH_50HZ=1` | modo PAL original (50 Hz) |
+| `SSTHEH_SPEED=n` | multiplicador inicial de avanço rápido (1 a 8; `F6` alterna 1×, 2×, 4×) |
 | `SSTHEH_30FPS_SCENES=1` | menus e telas 2D a 30 fps, como no disco |
 | `SSTHEH_PAD2=1` | um controle na porta 2 mesmo sem segundo gamepad (modos de dois jogadores) |
 | `SSTHEH_AUTOMASH=1` / `=0` | mash automático nos eventos de Big Bang ligado / desligado, só nesta execução (padrão: a escolha do menu F5) |
