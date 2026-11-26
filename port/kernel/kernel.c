@@ -85,6 +85,25 @@ int kernel_ntsc(void) { return ntsc; }
 
 volatile int rt_irq_pending;
 static volatile int timer_vblank;
+static volatile int speed;
+
+int kernel_speed(void) {
+    int s = speed;
+    if (!s) {
+        const char *e = getenv("SSTHEH_SPEED");
+        s = e ? atoi(e) : 1;
+        if (s < 1) s = 1;
+        if (s > 8) s = 8;
+        speed = s;
+    }
+    return s;
+}
+
+void kernel_set_speed(int s) {
+    if (s < 1) s = 1;
+    if (s > 8) s = 8;
+    speed = s;
+}
 
 u32 kernel_vblank_count(void) { return vblanks; }
 
@@ -289,11 +308,15 @@ void rt_poll(Ctx *c) {
 
 static void *timer_main(void *arg) {
     (void)arg;
-    struct timespec next;
+    struct timespec next, now;
     clock_gettime(CLOCK_MONOTONIC, &next);
     for (;;) {
-        next.tv_nsec += ntsc ? 16683333 : 20000000;   /* 59.94 or 50 Hz */
+        int spd = kernel_speed();
+        next.tv_nsec += (ntsc ? 16683333 : 20000000) / spd;   /* 59.94 or 50 Hz, scaled by speed */
         if (next.tv_nsec >= 1000000000) { next.tv_nsec -= 1000000000; next.tv_sec++; }
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (next.tv_sec < now.tv_sec || (next.tv_sec == now.tv_sec && next.tv_nsec < now.tv_nsec))
+            next = now;
         platform_sleep_until(&next);
         timer_vblank = 1;
         rt_irq_pending = 1;

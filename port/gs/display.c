@@ -37,6 +37,11 @@ extern u64 gs_prims;
 static u32 frame[1024 * 1024];
 static u32 render_frames;               /* pictures shown (GPU window), for the panel */
 
+static void speed_next(void) {
+    int s = kernel_speed();
+    kernel_set_speed(s == 1 ? 2 : s == 2 ? 4 : 1);
+}
+
 /* --press 600:CROSS,700:START,800:DOWN:20: press a button at those times for 6 vertical blanks, or for
    the given number (tests) */
 typedef struct { int at, len; u16 btn; } Press;
@@ -398,7 +403,8 @@ static void panel_update(void) {
     char size[24];
     if (win_size.w) snprintf(size, sizeof size, "%dx%d", win_size.w, win_size.h);
     else snprintf(size, sizeof size, "full screen");
-    snprintf(panel.line[3], 96, "F1: %s  F2: %s  F3: hide  F4: vsync %s", size, widescreen_on() ? "16:9" : "4:3", gpu_on && gpu_vsync() ? "on" : "off");
+    snprintf(panel.line[3], 96, "F1: %s  F2: %s  F3: hide  F4: vsync %s  F6: %dx", size, widescreen_on() ? "16:9" : "4:3",
+             gpu_on && gpu_vsync() ? "on" : "off", kernel_speed());
     if (getenv("SSTHEH_PERF_LOG")) {
 #ifdef __GLIBC__
         struct mallinfo2 mi = mallinfo2();
@@ -416,7 +422,7 @@ static void panel_draw(SDL_Renderer *ren) {
     if (!panel_on || !panel.line[0][0]) return;
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(ren, 0, 0, 0, 170);
-    SDL_FRect bg = {4, 4, 8 * 56 + 8, 4 * 10 + 8};
+    SDL_FRect bg = {4, 4, 8 * 60 + 8, 4 * 10 + 8};
     SDL_RenderFillRect(ren, &bg);
     SDL_SetRenderDrawColor(ren, 255, 255, 0, 255);
     for (int i = 0; i < 4; i++) SDL_RenderDebugText(ren, 8, 8 + i * 10, panel.line[i]);
@@ -470,6 +476,7 @@ static int display_window_gpu(void) {
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F2 && !e.key.repeat) widescreen_toggle();
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F3) panel_on = !panel_on;
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F4) gpu_set_vsync(!gpu_vsync());
+            if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F6 && !e.key.repeat) speed_next();
             if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) training_key(e.key.scancode);
         }
         poll_pads();

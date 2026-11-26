@@ -168,6 +168,7 @@ folder it is run from, else next to its executable (or one folder up).
 | F3 | performance panel (logic and display fps, CPU use) |
 | F4 | toggles vsync |
 | F5 | training menu (also Select + Start on a gamepad): see below |
+| F6 | fast-forward: cycles 1×, 2×, 4× (mutes audio while sped up) |
 
 Gamepads are picked up when they are connected: the first plays with the keyboard as player 1, the second as player 2
 (two-player modes, e.g. 1P vs 2P in 1,000 Days War).
@@ -223,6 +224,7 @@ vertical blanks, no window). Environment variables:
 | `SSTHEH_SCALE=n` | fixed render scale (1 to 8; default: follows the window size — 4 at 1080p, 5 at 4K) |
 | `SSTHEH_INTERP=0` | no interpolated frames (only the game's own) |
 | `SSTHEH_50HZ=1` | original PAL mode (50 Hz) |
+| `SSTHEH_SPEED=n` | initial fast-forward multiplier (1 to 8; `F6` cycles 1×, 2×, 4×) |
 | `SSTHEH_30FPS_SCENES=1` | menus and 2D screens at 30 fps, as on the disc |
 | `SSTHEH_PAD2=1` | a controller in port 2 even without a second gamepad (two-player modes) |
 | `SSTHEH_AUTOMASH=1` / `=0` | auto-mash in Big Bang events on / off, for this run (default: the F5 menu's choice) |

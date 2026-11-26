@@ -9,3 +9,7 @@ void sif_packet(Ctx *c, u32 src, u32 dst, u32 size);
 
 /* gs (port/gs) */
 void gs_set_crt(u32 interlace, u32 mode, u32 field);
+
+/* speed (kernel.c) */
+int kernel_speed(void);
+void kernel_set_speed(int s);

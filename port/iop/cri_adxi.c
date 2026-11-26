@@ -149,6 +149,7 @@ static void voice_flush(Voice *v) {
 
 void iop_lle_audio(float *out, int frames);   /* lle/iop_lib.c */
 void movie_audio(float *out, int frames);     /* port/hle/movie.c */
+int kernel_speed(void);
 
 static void mix(float *out, int frames) {
     memset(out, 0, (size_t)frames * 2 * sizeof *out);
@@ -191,11 +192,14 @@ static void SDLCALL audio_cb(void *ud, SDL_AudioStream *s, int additional, int t
     (void)ud;
     (void)total;
     static float buf[4096 * 2];
+    int spd = kernel_speed();
     while (additional > 0) {
         int frames = additional / (int)(2 * sizeof(float));
         if (frames <= 0) break;
         if (frames > 4096) frames = 4096;
         mix(buf, frames);
+        for (int k = 1; k < spd; k++) mix(buf, frames);
+        if (spd > 1) memset(buf, 0, (size_t)frames * 2 * sizeof(float));
         SDL_PutAudioStreamData(s, buf, frames * 2 * (int)sizeof(float));
         if (dump) {
             static s16 pcm[4096 * 2];
@@ -299,6 +303,7 @@ static void drain_by_time(void) {
     double secs = last_ns ? (double)(now - last_ns) / 1e9 : 0;
     if (secs > 0.25) secs = 0.25;      /* after a pause, don't skip a lot of sound */
     last_ns = now;
+    secs *= kernel_speed();
     for (u32 i = 0; i < MAX_SJX; i++) {
         Sjx *s = &sjx[i];
         if (!s->used) continue;
